@@ -1,0 +1,10 @@
+[package]
+name = "matchx-book"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+matchx-types.workspace = true
+matchx-arena.workspace = true
+hashbrown = "0.15"
+twox-hash = { version = "2", default-features = false, features = ["xxhash64"] }

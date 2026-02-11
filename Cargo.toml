@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/matchx-types",
+    "crates/matchx-arena",
+    "crates/matchx-book",
+    "crates/matchx-engine",
+    "crates/matchx-journal",
+    "crates/matchx-bench",
+    "crates/matchx-itests",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+matchx-types = { path = "crates/matchx-types" }
+matchx-arena = { path = "crates/matchx-arena" }
+matchx-book = { path = "crates/matchx-book" }
+matchx-engine = { path = "crates/matchx-engine" }
+matchx-journal = { path = "crates/matchx-journal" }
+matchx-itests = { path = "crates/matchx-itests" }
+proptest = "1"

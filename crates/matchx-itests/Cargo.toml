@@ -1,0 +1,13 @@
+[package]
+name = "matchx-itests"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+matchx-types.workspace = true
+matchx-engine.workspace = true
+matchx-journal.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,13 @@
+[package]
+name = "matchx-engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+matchx-types.workspace = true
+matchx-arena.workspace = true
+matchx-book.workspace = true
+smallvec = "1"
+
+[dev-dependencies]
+proptest.workspace = true

@@ -1,0 +1,7 @@
+[package]
+name = "matchx-arena"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+matchx-types.workspace = true
