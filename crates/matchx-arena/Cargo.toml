@@ -3,5 +3,11 @@ name = "matchx-arena"
 version.workspace = true
 edition.workspace = true
 
+[features]
+huge_pages = ["dep:libc"]
+
 [dependencies]
 matchx-types.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true, optional = true }

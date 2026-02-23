@@ -1,7 +1,7 @@
 //! End-to-end test: write commands to journal, replay, verify identical output.
 
 use matchx_engine::MatchingEngine;
-use matchx_journal::{JournalWriter, JournalReader};
+use matchx_journal::{JournalReader, JournalWriter};
 use matchx_types::*;
 
 fn config() -> InstrumentConfig {
@@ -17,16 +17,30 @@ fn config() -> InstrumentConfig {
 
 #[test]
 fn replay_produces_identical_output() {
-    let commands = vec![
+    let commands = [
         Command::NewOrder {
-            id: OrderId(1), instrument_id: 1, side: Side::Ask, price: 100, qty: 50,
-            order_type: OrderType::Limit, time_in_force: TimeInForce::GTC,
-            visible_qty: None, stop_price: None, stp_group: None,
+            id: OrderId(1),
+            instrument_id: 1,
+            side: Side::Ask,
+            price: 100,
+            qty: 50,
+            order_type: OrderType::Limit,
+            time_in_force: TimeInForce::GTC,
+            visible_qty: None,
+            stop_price: None,
+            stp_group: None,
         },
         Command::NewOrder {
-            id: OrderId(2), instrument_id: 1, side: Side::Bid, price: 100, qty: 30,
-            order_type: OrderType::Limit, time_in_force: TimeInForce::GTC,
-            visible_qty: None, stop_price: None, stp_group: None,
+            id: OrderId(2),
+            instrument_id: 1,
+            side: Side::Bid,
+            price: 100,
+            qty: 30,
+            order_type: OrderType::Limit,
+            time_in_force: TimeInForce::GTC,
+            visible_qty: None,
+            stop_price: None,
+            stp_group: None,
         },
         Command::CancelOrder { id: OrderId(1) },
     ];

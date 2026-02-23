@@ -1,7 +1,7 @@
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
 
-use alloc::collections::{btree_map::Entry, BTreeMap};
+use alloc::collections::{BTreeMap, btree_map::Entry};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::hash::BuildHasherDefault;
@@ -20,7 +20,9 @@ pub struct FenwickTree {
 
 impl FenwickTree {
     pub fn new(size: usize) -> Self {
-        Self { data: vec![0; size + 1] }
+        Self {
+            data: vec![0; size + 1],
+        }
     }
 
     pub fn add(&mut self, index: usize, delta: u64) {
@@ -34,9 +36,7 @@ impl FenwickTree {
     pub fn sub(&mut self, index: usize, delta: u64) {
         let mut i = index + 1;
         while i < self.data.len() {
-            self.data[i] = self.data[i]
-                .checked_sub(delta)
-                .expect("fenwick underflow");
+            self.data[i] = self.data[i].checked_sub(delta).expect("fenwick underflow");
             i += i & i.wrapping_neg();
         }
     }
@@ -75,7 +75,11 @@ struct SparseVolumeIndex {
 
 impl SparseVolumeIndex {
     fn new() -> Self {
-        Self { prices: Vec::new(), qtys: Vec::new(), fenwick: FenwickTree::new(0) }
+        Self {
+            prices: Vec::new(),
+            qtys: Vec::new(),
+            fenwick: FenwickTree::new(0),
+        }
     }
 
     fn add(&mut self, price: u64, qty: u64) {
@@ -93,7 +97,9 @@ impl SparseVolumeIndex {
     }
 
     fn sub(&mut self, price: u64, qty: u64) {
-        let rank = self.prices.binary_search(&price)
+        let rank = self
+            .prices
+            .binary_search(&price)
             .expect("price not in sparse volume index");
         self.qtys[rank] = self.qtys[rank]
             .checked_sub(qty)
@@ -119,7 +125,9 @@ impl SparseVolumeIndex {
     /// Sum of quantities at prices ≤ `price`.
     fn sum_at_or_below(&self, price: u64) -> u64 {
         let n = self.prices.partition_point(|&p| p <= price);
-        if n == 0 { return 0; }
+        if n == 0 {
+            return 0;
+        }
         self.fenwick.prefix_sum(n - 1)
     }
 
@@ -127,9 +135,15 @@ impl SparseVolumeIndex {
     fn sum_at_or_above(&self, price: u64) -> u64 {
         let start = self.prices.partition_point(|&p| p < price);
         let n = self.prices.len();
-        if start >= n { return 0; }
+        if start >= n {
+            return 0;
+        }
         let total = self.fenwick.prefix_sum(n - 1);
-        let before = if start > 0 { self.fenwick.prefix_sum(start - 1) } else { 0 };
+        let before = if start > 0 {
+            self.fenwick.prefix_sum(start - 1)
+        } else {
+            0
+        };
         total - before
     }
 }
@@ -161,7 +175,7 @@ pub struct OrderBook {
 impl OrderBook {
     pub fn new(config: InstrumentConfig) -> Self {
         let dense_n = config.max_ticks as usize;
-        let bitset_words = (dense_n + 63) / 64;
+        let bitset_words = dense_n.div_ceil(64);
         Self {
             instrument_id: config.id,
             bids_dense: vec![PriceLevel::EMPTY; dense_n],
@@ -228,6 +242,7 @@ impl OrderBook {
     }
 
     /// Insert a new order into the book. Returns the arena index, or None if arena is full.
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_order(
         &mut self,
         id: OrderId,
@@ -252,10 +267,10 @@ impl OrderBook {
             time_in_force: TimeInForce::GTC,
             timestamp: 0,
             visible_quantity,
-            stop_price: None,
-            stp_group,
-            prev: None,
-            next: None,
+            stp_group: stp_group.unwrap_or(STP_NONE),
+            prev: ARENA_NULL,
+            next: ARENA_NULL,
+            _pad: 0,
         };
 
         // Reject duplicate order IDs — determinism contract requires unique IDs.
@@ -269,11 +284,11 @@ impl OrderBook {
         let level = self.level_mut(side, price);
 
         let order_mut = arena.get_mut(arena_idx);
-        order_mut.prev = level.tail;
-        order_mut.next = None;
+        order_mut.prev = level.tail.unwrap_or(ARENA_NULL);
+        order_mut.next = ARENA_NULL;
 
         if let Some(tail) = level.tail {
-            arena.get_mut(tail).next = Some(arena_idx);
+            arena.get_mut(tail).next = arena_idx;
         } else {
             level.head = Some(arena_idx);
         }
@@ -397,7 +412,8 @@ impl OrderBook {
         let side = arena.get(idx).side;
         let price = arena.get(idx).price;
         let level = self.level_mut(side, price);
-        level.total_quantity = level.total_quantity
+        level.total_quantity = level
+            .total_quantity
             .checked_sub(delta)
             .expect("level qty underflow in reduce_order_qty");
         self.depth_remove(side, price, delta);
@@ -419,13 +435,15 @@ impl OrderBook {
         {
             let level = self.level_mut(side, price);
 
-            match prev {
-                Some(p) => arena.get_mut(p).next = next,
-                None => level.head = next,
+            if prev != ARENA_NULL {
+                arena.get_mut(prev).next = next;
+            } else {
+                level.head = if next != ARENA_NULL { Some(next) } else { None };
             }
-            match next {
-                Some(n) => arena.get_mut(n).prev = prev,
-                None => level.tail = prev,
+            if next != ARENA_NULL {
+                arena.get_mut(next).prev = prev;
+            } else {
+                level.tail = if prev != ARENA_NULL { Some(prev) } else { None };
             }
 
             level.total_quantity -= qty;
@@ -600,7 +618,7 @@ impl OrderBook {
 
     fn rebuild_indices(&mut self) {
         let dense_n = self.dense_max_ticks as usize;
-        let bitset_words = (dense_n + 63) / 64;
+        let bitset_words = dense_n.div_ceil(64);
 
         self.bids_occupied = vec![0u64; bitset_words];
         self.asks_occupied = vec![0u64; bitset_words];
@@ -610,11 +628,13 @@ impl OrderBook {
         for i in 0..dense_n {
             if !self.bids_dense[i].is_empty() {
                 self.set_occupied(Side::Bid, i);
-                self.bid_depth_index.add(i, self.bids_dense[i].total_quantity);
+                self.bid_depth_index
+                    .add(i, self.bids_dense[i].total_quantity);
             }
             if !self.asks_dense[i].is_empty() {
                 self.set_occupied(Side::Ask, i);
-                self.ask_depth_index.add(i, self.asks_dense[i].total_quantity);
+                self.ask_depth_index
+                    .add(i, self.asks_dense[i].total_quantity);
             }
         }
 
@@ -622,10 +642,14 @@ impl OrderBook {
     }
 
     fn rebuild_sparse_indices(&mut self) {
-        let bid_pairs = self.bids_sparse.iter()
+        let bid_pairs = self
+            .bids_sparse
+            .iter()
             .filter(|(_, l)| !l.is_empty())
             .map(|(&p, l)| (p, l.total_quantity));
-        let ask_pairs = self.asks_sparse.iter()
+        let ask_pairs = self
+            .asks_sparse
+            .iter()
             .filter(|(_, l)| !l.is_empty())
             .map(|(&p, l)| (p, l.total_quantity));
 
@@ -645,20 +669,20 @@ impl OrderBook {
 
     fn refresh_bbo_after_recenter(&mut self) {
         // Refresh best bid
-        if let Some(bid) = self.best_bid_tick {
-            if self.level_is_empty(Side::Bid, bid) {
-                self.best_bid_tick = self
-                    .find_highest_occupied_bid()
-                    .or_else(|| self.bids_sparse.keys().next_back().copied());
-            }
+        if let Some(bid) = self.best_bid_tick
+            && self.level_is_empty(Side::Bid, bid)
+        {
+            self.best_bid_tick = self
+                .find_highest_occupied_bid()
+                .or_else(|| self.bids_sparse.keys().next_back().copied());
         }
         // Refresh best ask
-        if let Some(ask) = self.best_ask_tick {
-            if self.level_is_empty(Side::Ask, ask) {
-                self.best_ask_tick = self
-                    .find_lowest_occupied_ask()
-                    .or_else(|| self.asks_sparse.keys().next().copied());
-            }
+        if let Some(ask) = self.best_ask_tick
+            && self.level_is_empty(Side::Ask, ask)
+        {
+            self.best_ask_tick = self
+                .find_lowest_occupied_ask()
+                .or_else(|| self.asks_sparse.keys().next().copied());
         }
     }
 
@@ -677,17 +701,21 @@ impl OrderBook {
 
     /// Total ask quantity available at or below `price` (dense Fenwick + sparse index).
     pub fn ask_available_at_or_below(&self, price: u64) -> u64 {
-        let window_end = self.dense_base_price.saturating_add(self.dense_max_ticks as u64);
+        let window_end = self
+            .dense_base_price
+            .saturating_add(self.dense_max_ticks as u64);
         if let Some(i) = self.dense_index(price) {
             // Dense prefix sum + all sparse asks below the dense window start.
             let dense = self.ask_depth_index.prefix_sum_le(i);
-            let sparse = self.asks_sparse_index
+            let sparse = self
+                .asks_sparse_index
                 .sum_at_or_below(self.dense_base_price.saturating_sub(1));
             dense + sparse
         } else if price >= window_end {
             // Price above window: all dense asks + sparse asks ≤ price.
             let dense_total = if self.dense_max_ticks > 0 {
-                self.ask_depth_index.prefix_sum(self.dense_max_ticks as usize - 1)
+                self.ask_depth_index
+                    .prefix_sum(self.dense_max_ticks as usize - 1)
             } else {
                 0
             };
@@ -700,7 +728,9 @@ impl OrderBook {
 
     /// Total bid quantity available at or above `price` (dense Fenwick + sparse index).
     pub fn bid_available_at_or_above(&self, price: u64) -> u64 {
-        let window_end = self.dense_base_price.saturating_add(self.dense_max_ticks as u64);
+        let window_end = self
+            .dense_base_price
+            .saturating_add(self.dense_max_ticks as u64);
         if let Some(i) = self.dense_index(price) {
             // Dense suffix sum + all sparse bids above the dense window end.
             let dense = self.bid_depth_index.suffix_sum_ge(i);
@@ -709,7 +739,8 @@ impl OrderBook {
         } else if price < self.dense_base_price {
             // Price below window: all dense bids + sparse bids ≥ price.
             let dense_total = if self.dense_max_ticks > 0 {
-                self.bid_depth_index.prefix_sum(self.dense_max_ticks as usize - 1)
+                self.bid_depth_index
+                    .prefix_sum(self.dense_max_ticks as usize - 1)
             } else {
                 0
             };
@@ -743,7 +774,16 @@ mod tests {
         let mut arena = matchx_arena::Arena::new(64);
         let mut book = OrderBook::new(config());
 
-        book.insert_order(OrderId(1), Side::Bid, 500, 10, OrderType::Limit, None, None, &mut arena);
+        book.insert_order(
+            OrderId(1),
+            Side::Bid,
+            500,
+            10,
+            OrderType::Limit,
+            None,
+            None,
+            &mut arena,
+        );
         assert_eq!(book.best_bid(), Some(500));
         assert_eq!(book.best_ask(), None);
     }
@@ -753,7 +793,16 @@ mod tests {
         let mut arena = matchx_arena::Arena::new(64);
         let mut book = OrderBook::new(config());
 
-        book.insert_order(OrderId(1), Side::Ask, 600, 10, OrderType::Limit, None, None, &mut arena);
+        book.insert_order(
+            OrderId(1),
+            Side::Ask,
+            600,
+            10,
+            OrderType::Limit,
+            None,
+            None,
+            &mut arena,
+        );
         assert_eq!(book.best_ask(), Some(600));
         assert_eq!(book.best_bid(), None);
     }
@@ -763,9 +812,36 @@ mod tests {
         let mut arena = matchx_arena::Arena::new(64);
         let mut book = OrderBook::new(config());
 
-        book.insert_order(OrderId(1), Side::Bid, 500, 10, OrderType::Limit, None, None, &mut arena);
-        book.insert_order(OrderId(2), Side::Bid, 510, 5, OrderType::Limit, None, None, &mut arena);
-        book.insert_order(OrderId(3), Side::Bid, 490, 20, OrderType::Limit, None, None, &mut arena);
+        book.insert_order(
+            OrderId(1),
+            Side::Bid,
+            500,
+            10,
+            OrderType::Limit,
+            None,
+            None,
+            &mut arena,
+        );
+        book.insert_order(
+            OrderId(2),
+            Side::Bid,
+            510,
+            5,
+            OrderType::Limit,
+            None,
+            None,
+            &mut arena,
+        );
+        book.insert_order(
+            OrderId(3),
+            Side::Bid,
+            490,
+            20,
+            OrderType::Limit,
+            None,
+            None,
+            &mut arena,
+        );
         assert_eq!(book.best_bid(), Some(510));
     }
 
@@ -774,9 +850,36 @@ mod tests {
         let mut arena = matchx_arena::Arena::new(64);
         let mut book = OrderBook::new(config());
 
-        book.insert_order(OrderId(1), Side::Ask, 600, 10, OrderType::Limit, None, None, &mut arena);
-        book.insert_order(OrderId(2), Side::Ask, 590, 5, OrderType::Limit, None, None, &mut arena);
-        book.insert_order(OrderId(3), Side::Ask, 610, 20, OrderType::Limit, None, None, &mut arena);
+        book.insert_order(
+            OrderId(1),
+            Side::Ask,
+            600,
+            10,
+            OrderType::Limit,
+            None,
+            None,
+            &mut arena,
+        );
+        book.insert_order(
+            OrderId(2),
+            Side::Ask,
+            590,
+            5,
+            OrderType::Limit,
+            None,
+            None,
+            &mut arena,
+        );
+        book.insert_order(
+            OrderId(3),
+            Side::Ask,
+            610,
+            20,
+            OrderType::Limit,
+            None,
+            None,
+            &mut arena,
+        );
         assert_eq!(book.best_ask(), Some(590));
     }
 
@@ -785,8 +888,26 @@ mod tests {
         let mut arena = matchx_arena::Arena::new(64);
         let mut book = OrderBook::new(config());
 
-        book.insert_order(OrderId(1), Side::Bid, 500, 10, OrderType::Limit, None, None, &mut arena);
-        book.insert_order(OrderId(2), Side::Bid, 500, 20, OrderType::Limit, None, None, &mut arena);
+        book.insert_order(
+            OrderId(1),
+            Side::Bid,
+            500,
+            10,
+            OrderType::Limit,
+            None,
+            None,
+            &mut arena,
+        );
+        book.insert_order(
+            OrderId(2),
+            Side::Bid,
+            500,
+            20,
+            OrderType::Limit,
+            None,
+            None,
+            &mut arena,
+        );
         let level = book.get_bid_level(500);
         assert_eq!(level.total_quantity, 30);
         assert_eq!(level.order_count, 2);
@@ -806,7 +927,18 @@ mod tests {
         let mut arena = matchx_arena::Arena::new(64);
         let mut book = OrderBook::new(config());
 
-        let idx = book.insert_order(OrderId(1), Side::Bid, 500, 10, OrderType::Limit, None, None, &mut arena).unwrap();
+        let idx = book
+            .insert_order(
+                OrderId(1),
+                Side::Bid,
+                500,
+                10,
+                OrderType::Limit,
+                None,
+                None,
+                &mut arena,
+            )
+            .unwrap();
         book.remove_order(idx, &mut arena);
         assert_eq!(book.best_bid(), None);
         assert!(book.get_bid_level(500).is_empty());
@@ -817,9 +949,38 @@ mod tests {
         let mut arena = matchx_arena::Arena::new(64);
         let mut book = OrderBook::new(config());
 
-        book.insert_order(OrderId(1), Side::Bid, 500, 10, OrderType::Limit, None, None, &mut arena);
-        let top = book.insert_order(OrderId(2), Side::Bid, 510, 5, OrderType::Limit, None, None, &mut arena).unwrap();
-        book.insert_order(OrderId(3), Side::Bid, 490, 20, OrderType::Limit, None, None, &mut arena);
+        book.insert_order(
+            OrderId(1),
+            Side::Bid,
+            500,
+            10,
+            OrderType::Limit,
+            None,
+            None,
+            &mut arena,
+        );
+        let top = book
+            .insert_order(
+                OrderId(2),
+                Side::Bid,
+                510,
+                5,
+                OrderType::Limit,
+                None,
+                None,
+                &mut arena,
+            )
+            .unwrap();
+        book.insert_order(
+            OrderId(3),
+            Side::Bid,
+            490,
+            20,
+            OrderType::Limit,
+            None,
+            None,
+            &mut arena,
+        );
 
         book.remove_order(top, &mut arena);
         assert_eq!(book.best_bid(), Some(500));
@@ -830,9 +991,42 @@ mod tests {
         let mut arena = matchx_arena::Arena::new(64);
         let mut book = OrderBook::new(config());
 
-        let a = book.insert_order(OrderId(1), Side::Bid, 500, 10, OrderType::Limit, None, None, &mut arena).unwrap();
-        let b = book.insert_order(OrderId(2), Side::Bid, 500, 20, OrderType::Limit, None, None, &mut arena).unwrap();
-        let c = book.insert_order(OrderId(3), Side::Bid, 500, 30, OrderType::Limit, None, None, &mut arena).unwrap();
+        let a = book
+            .insert_order(
+                OrderId(1),
+                Side::Bid,
+                500,
+                10,
+                OrderType::Limit,
+                None,
+                None,
+                &mut arena,
+            )
+            .unwrap();
+        let b = book
+            .insert_order(
+                OrderId(2),
+                Side::Bid,
+                500,
+                20,
+                OrderType::Limit,
+                None,
+                None,
+                &mut arena,
+            )
+            .unwrap();
+        let c = book
+            .insert_order(
+                OrderId(3),
+                Side::Bid,
+                500,
+                30,
+                OrderType::Limit,
+                None,
+                None,
+                &mut arena,
+            )
+            .unwrap();
 
         book.remove_order(b, &mut arena);
 
@@ -840,8 +1034,8 @@ mod tests {
         assert_eq!(level.total_quantity, 40); // 10 + 30
         assert_eq!(level.order_count, 2);
         // a -> c
-        assert_eq!(arena.get(a).next, Some(c));
-        assert_eq!(arena.get(c).prev, Some(a));
+        assert_eq!(arena.get(a).next, c);
+        assert_eq!(arena.get(c).prev, a);
     }
 
     // ---- Task 5A: Dense Window Recentering ----
@@ -854,12 +1048,30 @@ mod tests {
         let mut book = OrderBook::new(config);
 
         // Insert asks far above dense window to force sparse
-        book.insert_order(OrderId(1), Side::Ask, 200, 10, OrderType::Limit, None, None, &mut arena);
+        book.insert_order(
+            OrderId(1),
+            Side::Ask,
+            200,
+            10,
+            OrderType::Limit,
+            None,
+            None,
+            &mut arena,
+        );
         assert!(book.is_in_sparse(Side::Ask, 200));
 
         // Move BBO up by inserting bids near top of dense window
         for i in 0u64..80 {
-            book.insert_order(OrderId(100 + i), Side::Bid, 70 + (i % 10), 1, OrderType::Limit, None, None, &mut arena);
+            book.insert_order(
+                OrderId(100 + i),
+                Side::Bid,
+                70 + (i % 10),
+                1,
+                OrderType::Limit,
+                None,
+                None,
+                &mut arena,
+            );
         }
 
         // Trigger recenter — BBO has drifted past 70% of window
@@ -877,14 +1089,36 @@ mod tests {
         config.max_ticks = 100;
         let mut book = OrderBook::new(config);
 
-        let a = book.insert_order(OrderId(1), Side::Bid, 50, 10, OrderType::Limit, None, None, &mut arena).unwrap();
-        let b = book.insert_order(OrderId(2), Side::Bid, 50, 20, OrderType::Limit, None, None, &mut arena).unwrap();
+        let a = book
+            .insert_order(
+                OrderId(1),
+                Side::Bid,
+                50,
+                10,
+                OrderType::Limit,
+                None,
+                None,
+                &mut arena,
+            )
+            .unwrap();
+        let b = book
+            .insert_order(
+                OrderId(2),
+                Side::Bid,
+                50,
+                20,
+                OrderType::Limit,
+                None,
+                None,
+                &mut arena,
+            )
+            .unwrap();
 
         book.force_recenter(25, &mut arena);
 
         // Linkage still intact
-        assert_eq!(arena.get(a).next, Some(b));
-        assert_eq!(arena.get(b).prev, Some(a));
+        assert_eq!(arena.get(a).next, b);
+        assert_eq!(arena.get(b).prev, a);
         let level = book.get_bid_level(50);
         assert_eq!(level.total_quantity, 30);
         assert_eq!(level.order_count, 2);
@@ -897,7 +1131,16 @@ mod tests {
         config.max_ticks = 100;
         let mut book = OrderBook::new(config);
 
-        book.insert_order(OrderId(1), Side::Ask, 60, 10, OrderType::Limit, None, None, &mut arena);
+        book.insert_order(
+            OrderId(1),
+            Side::Ask,
+            60,
+            10,
+            OrderType::Limit,
+            None,
+            None,
+            &mut arena,
+        );
         book.force_recenter(20, &mut arena);
 
         // Ask at 60 should still be findable as best ask
@@ -914,7 +1157,16 @@ mod tests {
         let mut arena = matchx_arena::Arena::new(64);
         let mut book = OrderBook::new(config());
 
-        book.insert_order(OrderId(42), Side::Bid, 500, 10, OrderType::Limit, None, None, &mut arena);
+        book.insert_order(
+            OrderId(42),
+            Side::Bid,
+            500,
+            10,
+            OrderType::Limit,
+            None,
+            None,
+            &mut arena,
+        );
         let idx = book.lookup(OrderId(42)).unwrap();
         assert_eq!(arena.get(idx).id, OrderId(42));
     }
@@ -924,7 +1176,18 @@ mod tests {
         let mut arena = matchx_arena::Arena::new(64);
         let mut book = OrderBook::new(config());
 
-        let idx = book.insert_order(OrderId(42), Side::Bid, 500, 10, OrderType::Limit, None, None, &mut arena).unwrap();
+        let idx = book
+            .insert_order(
+                OrderId(42),
+                Side::Bid,
+                500,
+                10,
+                OrderType::Limit,
+                None,
+                None,
+                &mut arena,
+            )
+            .unwrap();
         book.remove_order(idx, &mut arena);
         assert!(book.lookup(OrderId(42)).is_none());
     }
@@ -934,26 +1197,40 @@ mod tests {
         let mut arena = matchx_arena::Arena::new(64);
         let mut book = OrderBook::new(config());
 
-        let first = book.insert_order(OrderId(42), Side::Bid, 500, 10, OrderType::Limit, None, None, &mut arena).unwrap();
-        let duplicate = book.insert_order(OrderId(42), Side::Ask, 600, 5, OrderType::Limit, None, None, &mut arena);
+        let first = book
+            .insert_order(
+                OrderId(42),
+                Side::Bid,
+                500,
+                10,
+                OrderType::Limit,
+                None,
+                None,
+                &mut arena,
+            )
+            .unwrap();
+        let duplicate = book.insert_order(
+            OrderId(42),
+            Side::Ask,
+            600,
+            5,
+            OrderType::Limit,
+            None,
+            None,
+            &mut arena,
+        );
         assert!(duplicate.is_none());
         assert_eq!(book.lookup(OrderId(42)), Some(first));
     }
 
     #[test]
     fn deterministic_hasher_produces_stable_output() {
-        use core::hash::{BuildHasher, Hash, Hasher};
+        use core::hash::BuildHasher;
         let build = DeterministicHasher::default();
-        let mut h = build.build_hasher();
-        OrderId(12345).hash(&mut h);
-        let result = h.finish();
+        let r1 = build.hash_one(OrderId(12345));
+        let r2 = build.hash_one(OrderId(12345));
         assert_eq!(
-            result,
-            {
-                let mut h2 = build.build_hasher();
-                OrderId(12345).hash(&mut h2);
-                h2.finish()
-            },
+            r1, r2,
             "Hasher must produce identical output for identical input"
         );
     }

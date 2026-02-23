@@ -41,6 +41,7 @@ pub trait MatchPolicy {
 pub struct PriceTimeFifo;
 
 impl MatchPolicy for PriceTimeFifo {
+    #[inline(always)]
     fn match_order(
         &self,
         taker_id: OrderId,
@@ -57,7 +58,8 @@ impl MatchPolicy for PriceTimeFifo {
             let maker = arena.get(maker_idx);
             let fill_qty = (*remaining).min(maker.remaining());
             let maker_id = maker.id;
-            cursor = maker.next;
+            let next = maker.next;
+            cursor = if next != ARENA_NULL { Some(next) } else { None };
             sink.on_fill(Fill {
                 maker_idx,
                 maker_id,

@@ -45,7 +45,7 @@ struct Order {
 
 `ArenaIndex` is a `u32` index into a pre-allocated `Vec<Order>` with free-list reuse. Zero heap allocation on insert/cancel.
 
-## Order Book Structure (Tick-Array + Arena)
+## Order Book Structure (Hybrid Tick-Array + Sparse Levels + Arena)
 
 ### Price Level
 
@@ -66,43 +66,69 @@ struct OrderBook {
     tick_size: u64,
     lot_size: u64,
 
-    // Tick-indexed arrays for O(1) price level access
-    bids: Vec<PriceLevel>,
-    asks: Vec<PriceLevel>,
-    base_price: u64,
-    max_ticks: u32,
+    // Dense tick window near BBO for O(1) hot-path access
+    bids_dense: Vec<PriceLevel>,
+    asks_dense: Vec<PriceLevel>,
+    dense_base_price: u64,
+    dense_max_ticks: u32,
+
+    // Sparse overflow for far-from-BBO prices
+    bids_sparse: BTreeMap<u64, PriceLevel>,
+    asks_sparse: BTreeMap<u64, PriceLevel>,
 
     // Best price tracking (maintained incrementally)
     best_bid: Option<u64>,
     best_ask: Option<u64>,
 
+    // Occupancy bitset for O(1) next-best lookup after level empties
+    // One bit per dense tick; find next occupied via leading_zeros/trailing_zeros
+    bids_occupied: Vec<u64>,  // ceil(dense_max_ticks / 64) words
+    asks_occupied: Vec<u64>,
+
+    // Side depth index for sublinear FOK checks
+    bid_depth_index: FenwickTree<u64>,
+    ask_depth_index: FenwickTree<u64>,
+
     // Order lookup by ID (fixed-seed hasher for determinism)
     order_index: HashMap<OrderId, ArenaIndex>,
 
-    // Stop orders (sorted by stop price)
+    // Stop orders indexed by stop price for range-trigger activation
     stop_bids: BTreeMap<u64, VecDeque<ArenaIndex>>,
     stop_asks: BTreeMap<u64, VecDeque<ArenaIndex>>,
+    next_stop_bid_trigger: Option<u64>,
+    next_stop_ask_trigger: Option<u64>,
 
     sequence: u64,
 }
 ```
 
-**Tick array sizing:** For BTC/USDT at $100k with $0.01 tick = 10M ticks, ~240MB per side at 24 bytes/level. Acceptable for high-value instruments. Configurable per instrument.
+**Dense window sizing:** Full-range tick arrays are too expensive for wide or drifting price ranges. For BTC/USDT at $100k with $0.01 tick = 10M ticks (~240MB per side at 24 bytes/level), use dense arrays only near BBO.
 
-**Best price tracking:** Maintained on insert/cancel. When a level empties, scan to next occupied level (amortized O(1) since levels are dense near BBO).
+**Hybrid level policy:** Keep a configurable dense window (e.g., 64K–512K ticks) centered near BBO, and store far levels in sparse `BTreeMap`. Recenter when BBO moves past a threshold (for example 70% of window width), migrating levels in bounded batches.
+
+**Best price tracking:** Maintained incrementally using a per-side **occupancy bitset** (one bit per dense tick). When the best price level empties, the next-best is found via `trailing_zeros` (asks) or `leading_zeros` (bids) on the bitset words — O(dense_max_ticks / 64) worst case, typically O(1). Sparse levels are consulted only when no occupied dense tick is found. This avoids the latency-busting linear scan that a naive dense-array walk would require.
+
+**Dense window recentering:** When BBO drifts past 70% of the dense window width, trigger a recenter operation that migrates levels between dense and sparse storage. Migration is performed in bounded batches (configurable, e.g., 4K ticks per batch) to cap worst-case latency. Recentering updates the occupancy bitsets and Fenwick trees atomically. Orders that migrate from dense to sparse (or vice versa) retain their intrusive list linkage — only the level container changes.
+
+**Indexed stop/FOK checks:** Stop activation uses `BTreeMap::range` from last trigger cursor (`O(log N + K)` for `K` triggered stops). FOK pre-check in phase 1 uses Fenwick/prefix sums for dense levels (`O(log N)`) plus linear sparse-range summation; phase 2 adds a sparse range-volume index for full sublinear checks.
 
 ## Matching Engine & Pluggable Rules
 
 ### MatchPolicy Trait
 
 ```rust
+trait FillSink {
+    fn push_fill(&mut self, fill: Fill);
+}
+
 trait MatchPolicy {
     fn match_order(
         &self,
         incoming: &Order,
-        level: &PriceLevel,
-        orders: &Arena<Order>,
-    ) -> Vec<Fill>;
+        level: &mut PriceLevel,
+        orders: &mut Arena<Order>,
+        fill_sink: &mut dyn FillSink,
+    );
 
     fn is_price_acceptable(
         &self,
@@ -115,18 +141,21 @@ trait MatchPolicy {
 
 Default implementation: `PriceTimeFIFO`.
 
+Engine passes a preallocated fill sink (`SmallVec`-backed or arena-backed) to keep matching hot-path allocation-free under normal load. The engine owns a reusable event output buffer (`Vec<MatchEvent>`) that is cleared and reused on each `process()` call, returning `&[MatchEvent]` to avoid per-call heap allocation.
+
 ### Matching Flow
 
 1. **Pre-trade validation:** instrument limits, order size, STP group check
-2. **Stop trigger check:** if execution changes BBO, scan stop orders for triggers
+2. **Stop trigger check:** after each fill, update `last_trade_price`; activate stop orders whose trigger condition transitioned to true via indexed range query and trigger cursors (`O(log N + K)`)
 3. **Match against resting book:**
    - Market: walk opposing side from best price until filled or exhausted
    - Limit: walk while price acceptable
    - IOC: limit match, cancel remainder
-   - FOK: pre-check total available, reject if insufficient, else fill all
+   - FOK: phase 1 queries dense depth index plus sparse range sum for available-volume pre-check; reject if insufficient, else fill all
    - Post-Only: reject if would cross spread
    - Iceberg: fill visible, replenish from hidden (back of queue)
-4. **Post-match:** remainder to book (GTC) or cancelled. Update BBO. Emit events.
+4. **Modify:** cancel-and-replace semantics — remove existing order, then route the replacement through the full new-order path (including matching against the opposing book). This ensures a modify that crosses the spread produces correct fills rather than resting silently.
+5. **Post-match:** remainder to book (GTC) or cancelled. Update BBO. Emit `BookUpdate` events for every price level whose quantity changed.
 
 ### Self-Trade Prevention
 
@@ -146,7 +175,7 @@ enum MatchEvent {
 }
 ```
 
-All events carry monotonic `sequence` and nanosecond timestamp.
+All events carry `EventMeta { sequence: u64, timestamp_ns: u64 }` — monotonic output sequence and deterministic logical clock (not wall-clock). The engine must populate `EventMeta` on every emitted event; `sequence` increments per event, `timestamp_ns` increments per event and is persisted in snapshots.
 
 ## Event Sourcing & Deterministic Replay
 
@@ -157,35 +186,54 @@ enum Command {
     NewOrder { ... },
     CancelOrder { id },
     ModifyOrder { id, new_price, new_qty },
-    TriggerAuction { instrument_id },
-    Snapshot { instrument_id },
 }
 ```
+
+`TriggerAuction` and explicit `Snapshot` commands are out of scope for this core milestone and belong to control-plane/orchestration phases.
 
 Each command gets `input_sequence: u64` at entry. Sequence (not wall-clock) determines execution order.
 
 ### Journal Format
 
-- Append-only binary: `[length: u32][input_sequence: u64][command bytes][crc32: u32]`
-- Flat binary layout (SBE-style), fixed-size structs where possible
-- `mmap` + sequential write; configurable `fsync` policy
-- Segments rotated at 256MB
+- Segment header (fixed 64B): `magic`, `version`, `shard_id`, `instrument_id`, `segment_index`, `start_input_sequence`, `created_at_ns`, `header_crc32c`
+- Record format: `[record_len: u32][record_type: u16][flags: u16][input_sequence: u64][command bytes][record_crc32c: u32]`
+- Command payload uses canonical binary schema (SBE-style) with explicit endianness and schema version
+- Append/write policy: sequential append, optional group-commit window, configurable `fsync` policy
+- Segment trailer: `last_committed_sequence`, `record_count`, `segment_hash`
+- Segments rotated at 256MB with strictly monotonic `segment_index`
 
 ### Replay
 
-- Feed journal commands sequentially into matching engine
+- Startup recovery scans segments in order, validates checksums, and truncates from first invalid/torn record to last valid boundary
+- Feed only valid committed records sequentially into matching engine
 - Output must be byte-identical across runs
-- Determinism via: tick-array indexing (no iteration order dependency), fixed-seed hasher, no wall-clock in matching, no floating point
+- Determinism via: deterministic dense-index + ordered sparse-map traversal, fixed-seed hasher, no wall-clock in matching, no floating point
+
+### Determinism Contract
+
+- `input_sequence` is the sole execution-order source of truth.
+- `EventMeta.timestamp_ns` is a logical engine clock (increment-by-one per emitted event), persisted in snapshots and never sourced from wall-clock.
+- Price-level traversal order is stable: bids high-to-low, asks low-to-high, FIFO within level using intrusive list order.
+- `HashMap` usage requires a fixed hasher seed; randomized seeds are forbidden.
+- Matching and replay code must not depend on wall-clock time, random numbers, unordered container iteration, or floating-point behavior.
 
 ### Snapshots
 
-- Periodic full order book state snapshots
-- Recovery: load snapshot + replay journal from snapshot sequence
-- Includes state hash for integrity verification
+- Periodic full order book state snapshots with canonical deterministic serialization order
+- Snapshot metadata includes `snapshot_sequence`, `input_sequence`, `segment_index`, and `segment_offset`
+- Snapshot commit protocol: write temp file, `fsync` file + directory, atomic rename to committed snapshot
+- Recovery: load latest committed snapshot + replay journal from stored segment/offset
+- Includes state hash and rolling event-hash anchor for integrity verification
 
 ### Hash Chain
 
-Rolling hash over output events for tamper detection and consistency verification.
+Use a cryptographic rolling hash over canonical event bytes for tamper detection and continuity verification:
+
+- `H_0 = BLAKE3("matchx:event-chain:v1" || genesis_anchor)`
+- `H_n = BLAKE3(H_{n-1} || canonical_event_bytes_n)`
+- Persist hash anchors in each segment trailer and snapshot metadata.
+- Recovery/replay verifies uninterrupted anchor continuity and fails hard on mismatch.
+- CRC remains for corruption/torn-write detection; hash chain covers semantic tampering.
 
 ## Project Structure
 
@@ -195,7 +243,7 @@ matchx/
 ├── crates/
 │   ├── matchx-types/       # Shared types
 │   ├── matchx-arena/       # Arena allocator + free list
-│   ├── matchx-book/        # OrderBook (tick-array)
+│   ├── matchx-book/        # OrderBook (hybrid dense+sparse levels)
 │   ├── matchx-engine/      # MatchingEngine + MatchPolicy
 │   ├── matchx-journal/     # Event journal, replay, snapshots
 │   └── matchx-bench/       # Benchmarks
@@ -207,12 +255,28 @@ matchx/
 
 - `#![no_std]` compatible for types, arena, book crates
 - `unsafe` only in arena (tested with Miri)
-- Fixed-seed hasher for `HashMap<OrderId, ArenaIndex>`
+- Fixed-seed hasher for `HashMap<OrderId, ArenaIndex>` — using `twox-hash::XxHash64` with explicit seed 0; verified with cross-platform hash stability test
 - `#[repr(C)]` with explicit cache-line padding on hot-path structs
+- `rust-toolchain.toml` at workspace root pinning MSRV for reproducible builds
 
 ## Testing Strategy
 
 - **proptest:** Bid/ask never cross, fill quantity conservation, sequence monotonicity, cancel-of-nonexistent rejected, replay determinism
-- **cargo-fuzz:** Random byte sequences as commands
+- **cargo-fuzz:** Random byte sequences as commands (dedicated setup task)
 - **Determinism test:** Same input twice, byte-identical output
 - **Benchmarks:** criterion (micro), iai-callgrind (CI regression), hdrhistogram (latency distribution)
+
+### CI Requirements
+
+- `cargo fmt --check` on all crates
+- `cargo clippy -- -D warnings` on all crates
+- `cargo +nightly miri test -p matchx-arena` for unsafe validation
+- `cargo-fuzz` smoke run (bounded iterations)
+- Benchmark baseline artifact storage for regression gating
+
+### Performance Acceptance
+
+- Benchmark environment: pinned isolated core, fixed CPU governor/performance profile, warm cache run after deterministic warmup.
+- Core latency gate for crossing match path: `P50 < 1us`, `P99 < 3us` under the documented benchmark workload.
+- CI regression gate: fail on >10% P99 regression versus baseline artifact for the same hardware profile.
+- Report must include throughput, `P50/P95/P99`, and allocation counts on hot path.

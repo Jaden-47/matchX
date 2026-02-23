@@ -1,0 +1,214 @@
+=== Benchmark Environment ===
+Date: 2026-03-02
+RUSTFLAGS: -C target-cpu=native
+profile.bench: opt-level=3, codegen-units=1, lto=thin, debug=1
+rustc: rustc 1.85.1 (4eb161250 2025-03-15)
+kernel: 6.6.87.2-microsoft-standard-WSL2
+cpu: AMD Ryzen 7 7700 8-Core Processor
+Command: cargo bench -p matchx-bench
+Note: `cargo bench` runs test harness in bench mode; unit tests appear as
+      "ignored" and are not executed — run `cargo test --workspace` separately.
+==============================
+
+   Compiling cfg-if v1.0.4
+   Compiling libc v0.2.182
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.44
+   Compiling zerocopy v0.8.40
+   Compiling matchx-types v0.1.0 (/home/jaden/workspace/matchX/crates/matchx-types)
+   Compiling serde_core v1.0.228
+   Compiling once_cell v1.21.3
+   Compiling autocfg v1.5.0
+   Compiling crossbeam-utils v0.8.21
+   Compiling allocator-api2 v0.2.21
+   Compiling equivalent v1.0.2
+   Compiling foldhash v0.1.5
+   Compiling getrandom v0.3.4
+   Compiling rustix v1.1.4
+   Compiling crc32fast v1.5.0
+   Compiling serde v1.0.228
+   Compiling matchx-arena v0.1.0 (/home/jaden/workspace/matchX/crates/matchx-arena)
+   Compiling zmij v1.0.21
+   Compiling twox-hash v2.1.2
+   Compiling regex-syntax v0.8.10
+   Compiling getrandom v0.4.1
+   Compiling serde_json v1.0.149
+   Compiling bitflags v2.11.0
+   Compiling either v1.15.0
+   Compiling linux-raw-sys v0.12.1
+   Compiling num-traits v0.2.19
+   Compiling hashbrown v0.15.5
+   Compiling rayon-core v1.13.0
+   Compiling anstyle v1.0.13
+   Compiling fastrand v2.3.0
+   Compiling clap_lex v1.0.0
+   Compiling memchr v2.8.0
+   Compiling itoa v1.0.17
+   Compiling plotters-backend v0.3.7
+   Compiling ciborium-io v0.2.2
+   Compiling smallvec v1.15.1
+   Compiling clap_builder v4.5.60
+   Compiling itertools v0.10.5
+   Compiling same-file v1.0.6
+   Compiling cast v0.3.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling plotters-svg v0.3.7
+   Compiling walkdir v2.5.0
+   Compiling matchx-journal v0.1.0 (/home/jaden/workspace/matchX/crates/matchx-journal)
+   Compiling anes v0.1.6
+   Compiling syn v2.0.117
+   Compiling matchx-book v0.1.0 (/home/jaden/workspace/matchX/crates/matchx-book)
+   Compiling crossbeam-deque v0.8.6
+   Compiling oorandom v11.1.5
+   Compiling fnv v1.0.7
+   Compiling bit-vec v0.8.0
+   Compiling quick-error v1.2.3
+   Compiling unarray v0.1.4
+   Compiling matchx-engine v0.1.0 (/home/jaden/workspace/matchX/crates/matchx-engine)
+   Compiling bit-set v0.8.0
+   Compiling is-terminal v0.4.17
+   Compiling plotters v0.3.7
+   Compiling wait-timeout v0.2.1
+   Compiling rand_core v0.9.5
+   Compiling rayon v1.11.0
+   Compiling rand v0.9.2
+   Compiling rand_xorshift v0.4.0
+   Compiling regex-automata v0.4.14
+   Compiling criterion-plot v0.5.0
+   Compiling tempfile v3.26.0
+   Compiling clap v4.5.60
+   Compiling rusty-fork v0.3.1
+   Compiling matchx-itests v0.1.0 (/home/jaden/workspace/matchX/crates/matchx-itests)
+   Compiling regex v1.12.3
+   Compiling zerocopy-derive v0.8.40
+   Compiling serde_derive v1.0.228
+   Compiling tinytemplate v1.2.1
+   Compiling half v2.7.1
+   Compiling ppv-lite86 v0.2.21
+   Compiling ciborium-ll v0.2.2
+   Compiling rand_chacha v0.9.0
+   Compiling ciborium v0.2.2
+   Compiling proptest v1.10.0
+   Compiling criterion v0.5.1
+   Compiling matchx-bench v0.1.0 (/home/jaden/workspace/matchX/crates/matchx-bench)
+    Finished `bench` profile [optimized] target(s) in 21.84s
+     Running unittests src/lib.rs (target/release/deps/matchx_arena-0b0a74677b7fab9d)
+
+running 5 tests
+test tests::alloc_and_get ... ignored
+test tests::alloc_fails_when_full ... ignored
+test tests::alloc_reuses_freed_slot ... ignored
+test tests::get_mut_modifies_in_place ... ignored
+test tests::len_tracks_live_count ... ignored
+
+test result: ok. 0 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/release/deps/matchx_bench-23a4eb2914d0cb72)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running benches/matching.rs (target/release/deps/matching-cdab6f0bb5b3e545)
+Gnuplot not found, using plotters backend
+Benchmarking insert_limit_order
+Benchmarking insert_limit_order: Warming up for 3.0000 s
+Benchmarking insert_limit_order: Collecting 100 samples in estimated 5.0001 s (212M iterations)
+Benchmarking insert_limit_order: Analyzing
+insert_limit_order      time:   [21.441 ns 21.516 ns 21.605 ns]
+Found 13 outliers among 100 measurements (13.00%)
+  4 (4.00%) high mild
+  9 (9.00%) high severe
+
+Benchmarking crossing_trade
+Benchmarking crossing_trade: Warming up for 3.0000 s
+Benchmarking crossing_trade: Collecting 100 samples in estimated 5.0001 s (175M iterations)
+Benchmarking crossing_trade: Analyzing
+crossing_trade          time:   [22.919 ns 23.160 ns 23.457 ns]
+Found 9 outliers among 100 measurements (9.00%)
+  5 (5.00%) high mild
+  4 (4.00%) high severe
+
+Benchmarking cancel_order
+Benchmarking cancel_order: Warming up for 3.0000 s
+Benchmarking cancel_order: Collecting 100 samples in estimated 5.0000 s (1.0B iterations)
+Benchmarking cancel_order: Analyzing
+cancel_order            time:   [4.9815 ns 4.9892 ns 4.9975 ns]
+Found 7 outliers among 100 measurements (7.00%)
+  3 (3.00%) high mild
+  4 (4.00%) high severe
+
+     Running unittests src/lib.rs (target/release/deps/matchx_book-09c63a4739986f5d)
+
+running 16 tests
+test tests::cancel_best_bid_finds_next_best ... ignored
+test tests::cancel_middle_of_queue_preserves_links ... ignored
+test tests::cancel_only_order_clears_best ... ignored
+test tests::deterministic_hasher_produces_stable_output ... ignored
+test tests::duplicate_order_id_is_rejected_and_original_mapping_preserved ... ignored
+test tests::fenwick_sub_underflow_panics - should panic ... ignored
+test tests::insert_ask_updates_best_ask ... ignored
+test tests::insert_bid_updates_best_bid ... ignored
+test tests::level_quantity_accumulates ... ignored
+test tests::lookup_order_by_id ... ignored
+test tests::lookup_returns_none_after_cancel ... ignored
+test tests::multiple_asks_best_is_lowest ... ignored
+test tests::multiple_bids_best_is_highest ... ignored
+test tests::recenter_preserves_order_linkage ... ignored
+test tests::recenter_updates_bitset_and_fenwick ... ignored
+test tests::recenter_when_bbo_drifts_past_threshold ... ignored
+
+test result: ok. 0 passed; 0 failed; 16 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/release/deps/matchx_engine-ff8ee23caf626e21)
+
+running 20 tests
+test tests::cancel_existing_order ... ignored
+test tests::crossing_limit_orders_produce_fill ... ignored
+test tests::fok_fills_when_sufficient_liquidity ... ignored
+test tests::fok_reject_does_not_emit_order_accepted ... ignored
+test tests::fok_rejects_if_insufficient_liquidity ... ignored
+test tests::iceberg_fully_consumed_when_hidden_exhausted ... ignored
+test tests::iceberg_replenishes_visible_after_fill ... ignored
+test tests::ioc_cancels_unfilled_remainder ... ignored
+test tests::limit_buy_rests_on_empty_book ... ignored
+test tests::market_order_fills_against_book ... ignored
+test tests::partial_fill_remainder_rests ... ignored
+test tests::post_only_rejected_when_would_cross ... ignored
+test tests::post_only_rests_when_no_cross ... ignored
+test tests::stop_limit_buy_triggers_on_last_trade_price ... ignored
+test tests::stop_limit_sell_triggers_on_price_down ... ignored
+test tests::stp_cancel_both_cancels_both_orders ... ignored
+test tests::stp_cancel_newest_prevents_self_trade ... ignored
+test tests::stp_cancel_oldest_cancels_resting_order ... ignored
+test tests::stp_decrement_and_cancel_reduces_overlap ... ignored
+test tests::taker_sweeps_multiple_price_levels_in_one_call ... ignored
+
+test result: ok. 0 passed; 0 failed; 20 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/release/deps/matchx_itests-cbcf917b1efd8294)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/release/deps/matchx_journal-169b0cc743ea5ef1)
+
+running 2 tests
+test tests::crc_detects_corruption ... ignored
+test tests::write_and_read_back_commands ... ignored
+
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/release/deps/matchx_types-44a2eb4f6735f3f8)
+
+running 5 tests
+test tests::arena_index_conversion ... ignored
+test tests::order_is_filled ... ignored
+test tests::order_remaining_quantity ... ignored
+test tests::remaining_saturates_on_invalid_overfill_state ... ignored
+test tests::side_opposite ... ignored
+
+test result: ok. 0 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

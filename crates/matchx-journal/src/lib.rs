@@ -1,9 +1,13 @@
+mod async_journal;
 mod codec;
-mod writer;
 mod reader;
+mod recovery;
+mod writer;
 
+pub use async_journal::{AsyncJournal, AsyncJournalConfig};
+pub use reader::{JournalEntry, JournalReader};
+pub use recovery::{RecoveryManager, RecoveryReport};
 pub use writer::JournalWriter;
-pub use reader::{JournalReader, JournalEntry};
 
 /// Errors produced by journal operations.
 #[derive(Debug)]
@@ -11,6 +15,9 @@ pub enum JournalError {
     Io(std::io::Error),
     CrcMismatch,
     InvalidData,
+    QueueFull,
+    WriterStopped,
+    WriterDegraded,
 }
 
 impl From<std::io::Error> for JournalError {
@@ -23,6 +30,7 @@ impl From<std::io::Error> for JournalError {
 mod tests {
     use super::*;
     use matchx_types::*;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn write_and_read_back_commands() {
@@ -30,9 +38,16 @@ mod tests {
         let path = dir.path().join("journal.bin");
 
         let cmd1 = Command::NewOrder {
-            id: OrderId(1), instrument_id: 1, side: Side::Bid, price: 100, qty: 10,
-            order_type: OrderType::Limit, time_in_force: TimeInForce::GTC,
-            visible_qty: None, stop_price: None, stp_group: None,
+            id: OrderId(1),
+            instrument_id: 1,
+            side: Side::Bid,
+            price: 100,
+            qty: 10,
+            order_type: OrderType::Limit,
+            time_in_force: TimeInForce::GTC,
+            visible_qty: None,
+            stop_price: None,
+            stp_group: None,
         };
         let cmd2 = Command::CancelOrder { id: OrderId(1) };
 
@@ -68,5 +83,61 @@ mod tests {
 
         let mut reader = JournalReader::open(&path).unwrap();
         assert!(reader.read_all().is_err());
+    }
+
+    #[test]
+    fn rotates_segments_when_max_bytes_exceeded() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut writer = JournalWriter::open_segmented(dir.path(), 256).unwrap();
+        for seq in 1..=200 {
+            writer.append(seq, &cmd()).unwrap();
+        }
+
+        let segments = list_segments(dir.path());
+        assert!(
+            segments.len() > 1,
+            "expected >1 segment, got {}",
+            segments.len()
+        );
+    }
+
+    #[test]
+    fn reader_reads_across_rotated_segments_in_sequence_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut writer = JournalWriter::open_segmented(dir.path(), 128).unwrap();
+        for seq in 1..=32 {
+            writer.append(seq, &cancel_cmd(seq)).unwrap();
+        }
+        drop(writer);
+
+        let mut reader = JournalReader::open(dir.path()).unwrap();
+        let entries = reader.read_all().unwrap();
+        assert_eq!(entries.len(), 32);
+        for (i, entry) in entries.iter().enumerate() {
+            assert_eq!(entry.sequence, i as u64 + 1);
+        }
+    }
+
+    fn list_segments(dir: &Path) -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .map(|name| name.starts_with("journal-") && name.ends_with(".wal"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    fn cmd() -> Command {
+        Command::CancelOrder { id: OrderId(42) }
+    }
+
+    fn cancel_cmd(id: u64) -> Command {
+        Command::CancelOrder { id: OrderId(id) }
     }
 }

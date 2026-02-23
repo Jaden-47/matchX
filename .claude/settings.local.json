@@ -1,7 +1,14 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "Bash(mkdir:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo test:*)",
+      "Bash(cat:*)",
+      "Bash(cargo bench:*)",
+      "Bash(cargo build:*)",
+      "Bash(rustc:*)"
     ]
   }
 }

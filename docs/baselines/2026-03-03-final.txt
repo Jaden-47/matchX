@@ -1,0 +1,170 @@
+warning: /home/jaden/workspace/matchX/Cargo.toml: `panic` setting is ignored for `bench` profile
+   Compiling matchx-arena v0.1.0 (/home/jaden/workspace/matchX/crates/matchx-arena)
+   Compiling matchx-journal v0.1.0 (/home/jaden/workspace/matchX/crates/matchx-journal)
+   Compiling matchx-types v0.1.0 (/home/jaden/workspace/matchX/crates/matchx-types)
+   Compiling matchx-book v0.1.0 (/home/jaden/workspace/matchX/crates/matchx-book)
+   Compiling matchx-engine v0.1.0 (/home/jaden/workspace/matchX/crates/matchx-engine)
+   Compiling matchx-bench v0.1.0 (/home/jaden/workspace/matchX/crates/matchx-bench)
+   Compiling matchx-itests v0.1.0 (/home/jaden/workspace/matchX/crates/matchx-itests)
+    Finished `bench` profile [optimized + debuginfo] target(s) in 15.21s
+     Running unittests src/lib.rs (target/release/deps/matchx_arena-4a1b8f3f1eb6e204)
+
+running 6 tests
+test tests::alloc_and_get ... ignored
+test tests::alloc_fails_when_full ... ignored
+test tests::alloc_reuses_freed_slot ... ignored
+test tests::get_mut_modifies_in_place ... ignored
+test tests::len_tracks_live_count ... ignored
+test tests::slot_size_is_exactly_64_bytes ... ignored
+
+test result: ok. 0 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/release/deps/matchx_bench-e6bce1d202263bd4)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running benches/latency_histogram.rs (target/release/deps/latency_histogram-e3716dd55a650d80)
+Running latency histogram (1000000 iterations)...
+Note: Run on bare metal with isolcpus for sub-µs p99 measurement.
+
+=== insert_limit_order (non-crossing) ===
+  samples :    1000000
+  p50     :         30 ns
+  p99     :        100 ns  ← SLO target: < 1000 ns on bare metal with isolcpus
+  p99.9   :       1502 ns
+  p99.99  :       3897 ns
+  max     :    1278975 ns
+  mean    :       34.4 ns
+  stddev  :     1476.1 ns
+
+✓ p99 < 10µs (100 ns) — dev machine baseline acceptable
+     Running benches/matching.rs (target/release/deps/matching-671b7b87eddb465d)
+Gnuplot not found, using plotters backend
+Benchmarking insert_limit_order
+Benchmarking insert_limit_order: Warming up for 3.0000 s
+Benchmarking insert_limit_order: Collecting 100 samples in estimated 5.0001 s (293M iterations)
+Benchmarking insert_limit_order: Analyzing
+insert_limit_order      time:   [17.800 ns 17.897 ns 18.019 ns]
+                        change: [-22.879% -13.711% -3.4294%] (p = 0.01 < 0.05)
+                        Performance has improved.
+Found 13 outliers among 100 measurements (13.00%)
+  4 (4.00%) high mild
+  9 (9.00%) high severe
+
+Benchmarking crossing_trade
+Benchmarking crossing_trade: Warming up for 3.0000 s
+Benchmarking crossing_trade: Collecting 100 samples in estimated 5.0000 s (296M iterations)
+Benchmarking crossing_trade: Analyzing
+crossing_trade          time:   [17.760 ns 17.864 ns 17.990 ns]
+                        change: [-26.341% -17.550% -6.7939%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 11 outliers among 100 measurements (11.00%)
+  3 (3.00%) high mild
+  8 (8.00%) high severe
+
+Benchmarking cancel_order
+Benchmarking cancel_order: Warming up for 3.0000 s
+Benchmarking cancel_order: Collecting 100 samples in estimated 5.0000 s (1.0B iterations)
+Benchmarking cancel_order: Analyzing
+cancel_order            time:   [5.0095 ns 5.0203 ns 5.0322 ns]
+                        change: [-0.1443% +1.1630% +2.2915%] (p = 0.06 > 0.05)
+                        No change in performance detected.
+Found 5 outliers among 100 measurements (5.00%)
+  1 (1.00%) high mild
+  4 (4.00%) high severe
+
+     Running unittests src/lib.rs (target/release/deps/matchx_book-3ea0f31ae1e48489)
+
+running 16 tests
+test tests::cancel_best_bid_finds_next_best ... ignored
+test tests::cancel_middle_of_queue_preserves_links ... ignored
+test tests::cancel_only_order_clears_best ... ignored
+test tests::deterministic_hasher_produces_stable_output ... ignored
+test tests::duplicate_order_id_is_rejected_and_original_mapping_preserved ... ignored
+test tests::fenwick_sub_underflow_panics - should panic ... ignored
+test tests::insert_ask_updates_best_ask ... ignored
+test tests::insert_bid_updates_best_bid ... ignored
+test tests::level_quantity_accumulates ... ignored
+test tests::lookup_order_by_id ... ignored
+test tests::lookup_returns_none_after_cancel ... ignored
+test tests::multiple_asks_best_is_lowest ... ignored
+test tests::multiple_bids_best_is_highest ... ignored
+test tests::recenter_preserves_order_linkage ... ignored
+test tests::recenter_updates_bitset_and_fenwick ... ignored
+test tests::recenter_when_bbo_drifts_past_threshold ... ignored
+
+test result: ok. 0 passed; 0 failed; 16 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/release/deps/matchx_engine-18aac35a6e585ffb)
+
+running 22 tests
+test tests::cancel_existing_order ... ignored
+test tests::crossing_limit_orders_produce_fill ... ignored
+test tests::event_buffer_does_not_overflow_on_16_fills ... ignored
+test tests::fok_fills_when_sufficient_liquidity ... ignored
+test tests::fok_reject_does_not_emit_order_accepted ... ignored
+test tests::fok_rejects_if_insufficient_liquidity ... ignored
+test tests::iceberg_fully_consumed_when_hidden_exhausted ... ignored
+test tests::iceberg_replenishes_visible_after_fill ... ignored
+test tests::ioc_cancels_unfilled_remainder ... ignored
+test tests::limit_buy_rests_on_empty_book ... ignored
+test tests::market_order_fills_against_book ... ignored
+test tests::partial_fill_remainder_rests ... ignored
+test tests::post_only_rejected_when_would_cross ... ignored
+test tests::post_only_rests_when_no_cross ... ignored
+test tests::stop_limit_buy_triggers_on_last_trade_price ... ignored
+test tests::stop_limit_sell_triggers_on_price_down ... ignored
+test tests::stop_limit_triggers_correctly_after_queue_refactor ... ignored
+test tests::stp_cancel_both_cancels_both_orders ... ignored
+test tests::stp_cancel_newest_prevents_self_trade ... ignored
+test tests::stp_cancel_oldest_cancels_resting_order ... ignored
+test tests::stp_decrement_and_cancel_reduces_overlap ... ignored
+test tests::taker_sweeps_multiple_price_levels_in_one_call ... ignored
+
+test result: ok. 0 passed; 0 failed; 22 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/release/deps/matchx_itests-8b71405068032623)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/release/deps/matchx_journal-8da15b6839cb8464)
+
+running 2 tests
+test tests::crc_detects_corruption ... ignored
+test tests::write_and_read_back_commands ... ignored
+
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/release/deps/matchx_types-4a0efa45f4af7c08)
+
+running 6 tests
+test tests::arena_index_conversion ... ignored
+test tests::order_is_filled ... ignored
+test tests::order_remaining_quantity ... ignored
+test tests::print_order_size ... ignored
+test tests::remaining_saturates_on_invalid_overfill_state ... ignored
+test tests::side_opposite ... ignored
+
+test result: ok. 0 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+warning: /home/jaden/workspace/matchX/Cargo.toml: `panic` setting is ignored for `bench` profile
+    Finished `bench` profile [optimized + debuginfo] target(s) in 0.04s
+     Running benches/latency_histogram.rs (target/release/deps/latency_histogram-e3716dd55a650d80)
+Running latency histogram (1000000 iterations)...
+Note: Run on bare metal with isolcpus for sub-µs p99 measurement.
+
+=== insert_limit_order (non-crossing) ===
+  samples :    1000000
+  p50     :         30 ns
+  p99     :        101 ns  ← SLO target: < 1000 ns on bare metal with isolcpus
+  p99.9   :       1502 ns
+  p99.99  :       3907 ns
+  max     :    1192959 ns
+  mean    :       34.0 ns
+  stddev  :     1388.3 ns
+
+✓ p99 < 10µs (101 ns) — dev machine baseline acceptable

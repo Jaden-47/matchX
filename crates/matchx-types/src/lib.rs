@@ -50,9 +50,9 @@ pub enum OrderType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum TimeInForce {
-    GTC,  // Good-til-Cancel
-    IOC,  // Immediate-or-Cancel
-    FOK,  // Fill-or-Kill
+    GTC, // Good-til-Cancel
+    IOC, // Immediate-or-Cancel
+    FOK, // Fill-or-Kill
 }
 
 /// Self-trade prevention mode.
@@ -73,36 +73,48 @@ pub enum RejectReason {
     InvalidQuantity,
     InstrumentNotFound,
     OrderNotFound,
-    WouldCrossSpread,             // Post-only rejection
-    InsufficientLiquidity,        // FOK rejection
+    WouldCrossSpread,      // Post-only rejection
+    InsufficientLiquidity, // FOK rejection
     SelfTradePreventionTriggered,
     DuplicateOrderId,
 }
 
+/// Sentinel value for ArenaIndex meaning "no link" (replaces Option<ArenaIndex>).
+pub const ARENA_NULL: ArenaIndex = ArenaIndex(u32::MAX);
+
+/// Sentinel value for stp_group meaning "no group" (replaces Option<u32>).
+pub const STP_NONE: u32 = u32::MAX;
+
 /// An order stored in the arena. Uses intrusive doubly-linked list
 /// for FIFO queue at each price level.
+///
+/// Layout is carefully tuned to exactly 64 bytes (one cache line).
+/// `stop_price` is NOT stored here — stop-limit orders live in the
+/// engine's StopEntry queue until triggered, never in the arena.
 #[derive(Debug, Clone)]
-#[repr(C)]
+#[repr(C, align(64))]
 pub struct Order {
     pub id: OrderId,
+    pub price: u64,
+    pub quantity: u64,
+    pub filled: u64,
+    pub timestamp: u64,
+    pub visible_quantity: u64,
+    /// `STP_NONE` (u32::MAX) means no STP group.
+    pub stp_group: u32,
+    /// `ARENA_NULL` means no previous order in the price-level list.
+    pub prev: ArenaIndex,
+    /// `ARENA_NULL` means no next order in the price-level list.
+    pub next: ArenaIndex,
     pub side: Side,
-    pub price: u64,            // ticks
-    pub quantity: u64,         // lots
-    pub filled: u64,           // lots
     pub order_type: OrderType,
     pub time_in_force: TimeInForce,
-    pub timestamp: u64,        // nanoseconds, monotonic
-    pub visible_quantity: u64, // for Iceberg
-    pub stop_price: Option<u64>,
-    pub stp_group: Option<u32>,
-    // Intrusive linked list pointers (arena indices)
-    pub prev: Option<ArenaIndex>,
-    pub next: Option<ArenaIndex>,
+    pub _pad: u8,
 }
 
 impl Order {
     /// Remaining unfilled quantity.
-    #[inline]
+    #[inline(always)]
     pub fn remaining(&self) -> u64 {
         self.quantity.saturating_sub(self.filled)
     }
@@ -114,7 +126,7 @@ impl Order {
     }
 
     /// Whether order is fully filled.
-    #[inline]
+    #[inline(always)]
     pub fn is_filled(&self) -> bool {
         self.filled >= self.quantity
     }
@@ -122,7 +134,7 @@ impl Order {
     /// Quantity available for matching from this resting order.
     /// For Iceberg orders this is the current visible slice; for all others it equals `remaining()`.
     /// Uses arithmetic replenishment: `filled % visible_quantity` gives position in current slice.
-    #[inline]
+    #[inline(always)]
     pub fn matchable_qty(&self) -> u64 {
         match self.order_type {
             OrderType::Iceberg if self.visible_quantity > 0 => {
@@ -134,6 +146,11 @@ impl Order {
         }
     }
 }
+
+const _: () = assert!(
+    core::mem::size_of::<Order>() == 64,
+    "Order must be exactly 64 bytes (one cache line)"
+);
 
 /// A price level in the order book.
 #[derive(Debug, Clone)]
@@ -158,6 +175,11 @@ impl PriceLevel {
         self.order_count == 0
     }
 }
+
+const _: () = assert!(
+    core::mem::size_of::<PriceLevel>() <= 32,
+    "PriceLevel should fit within 32 bytes (half a cache line)"
+);
 
 /// Metadata shared by all emitted events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -226,8 +248,8 @@ pub enum Command {
         qty: u64,
         order_type: OrderType,
         time_in_force: TimeInForce,
-        visible_qty: Option<u64>,  // Iceberg
-        stop_price: Option<u64>,   // Stop-Limit
+        visible_qty: Option<u64>, // Iceberg
+        stop_price: Option<u64>,  // Stop-Limit
         stp_group: Option<u32>,
     },
     CancelOrder {
@@ -273,10 +295,10 @@ mod tests {
             time_in_force: TimeInForce::GTC,
             timestamp: 0,
             visible_quantity: 100,
-            stop_price: None,
-            stp_group: None,
-            prev: None,
-            next: None,
+            stp_group: STP_NONE,
+            prev: ARENA_NULL,
+            next: ARENA_NULL,
+            _pad: 0,
         };
         assert_eq!(order.remaining(), 70);
         assert!(!order.is_filled());
@@ -294,10 +316,10 @@ mod tests {
             time_in_force: TimeInForce::GTC,
             timestamp: 0,
             visible_quantity: 50,
-            stop_price: None,
-            stp_group: None,
-            prev: None,
-            next: None,
+            stp_group: STP_NONE,
+            prev: ARENA_NULL,
+            next: ARENA_NULL,
+            _pad: 0,
         };
         assert_eq!(order.remaining(), 0);
         assert!(order.is_filled());
@@ -321,12 +343,21 @@ mod tests {
             time_in_force: TimeInForce::GTC,
             timestamp: 0,
             visible_quantity: 10,
-            stop_price: None,
-            stp_group: None,
-            prev: None,
-            next: None,
+            stp_group: STP_NONE,
+            prev: ARENA_NULL,
+            next: ARENA_NULL,
+            _pad: 0,
         };
         assert_eq!(order.remaining(), 0);
         assert!(!order.is_valid_state());
+    }
+
+    #[test]
+    fn print_order_size() {
+        // Run with: cargo test -p matchx-types print_order_size -- --nocapture
+        println!("size_of::<Order>() = {}", core::mem::size_of::<Order>());
+        println!("align_of::<Order>() = {}", core::mem::align_of::<Order>());
+        assert_eq!(core::mem::size_of::<Order>(), 64);
+        assert_eq!(core::mem::align_of::<Order>(), 64);
     }
 }

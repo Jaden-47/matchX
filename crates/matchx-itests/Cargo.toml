@@ -11,3 +11,4 @@ matchx-journal.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+matchx-bench = { path = "../matchx-bench" }

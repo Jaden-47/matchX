@@ -1,6 +1,9 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use matchx_bench::{EndToEndPipeline, LatencySummary};
 use matchx_engine::MatchingEngine;
+use matchx_journal::{AsyncJournalConfig, JournalError};
 use matchx_types::*;
+use std::time::Instant;
 
 fn config() -> InstrumentConfig {
     InstrumentConfig {
@@ -8,105 +11,144 @@ fn config() -> InstrumentConfig {
         tick_size: 1,
         lot_size: 1,
         base_price: 0,
-        max_ticks: 10000,
+        max_ticks: 10_000,
         stp_mode: StpMode::CancelNewest,
     }
 }
 
-fn bench_insert_limit_order(c: &mut Criterion) {
-    c.bench_function("insert_limit_order", |b| {
-        let mut engine = MatchingEngine::new(config(), 65536);
-        let mut id = 1u64;
-        b.iter(|| {
-            let side = if id % 2 == 0 { Side::Bid } else { Side::Ask };
-            let price = if side == Side::Bid {
-                4900 + (id % 100)
-            } else {
-                5100 + (id % 100)
-            };
-            engine.process(black_box(Command::NewOrder {
-                id: OrderId(id),
-                instrument_id: 1,
-                side,
-                price,
-                qty: 10,
-                order_type: OrderType::Limit,
-                time_in_force: TimeInForce::GTC,
-                visible_qty: None,
-                stop_price: None,
-                stp_group: None,
-            }));
-            id += 1;
-        });
-    });
+fn journal_cfg() -> AsyncJournalConfig {
+    AsyncJournalConfig {
+        queue_capacity: 8192,
+        batch_size: 128,
+        flush_interval_ms: 1,
+        segment_max_bytes: 8 * 1024 * 1024,
+    }
 }
 
-fn bench_crossing_trade(c: &mut Criterion) {
-    c.bench_function("crossing_trade", |b| {
+fn bench_core_process_only(c: &mut Criterion) {
+    c.bench_function("core_process_only", |b| {
         b.iter_custom(|iters| {
-            let mut engine = MatchingEngine::new(config(), 65536);
-            // Pre-populate asks across 100 price levels.
-            for i in 0u64..1000 {
-                engine.process(Command::NewOrder {
-                    id: OrderId(i + 1),
-                    instrument_id: 1,
-                    side: Side::Ask,
-                    price: 5000 + (i % 100),
-                    qty: 10,
-                    order_type: OrderType::Limit,
-                    time_in_force: TimeInForce::GTC,
-                    visible_qty: None,
-                    stop_price: None,
-                    stp_group: None,
-                });
-            }
-            let start = std::time::Instant::now();
+            let mut engine = MatchingEngine::new(config(), 65_536);
+            let mut order_id = 1_u64;
+            let stride = sample_stride(iters);
+            let mut samples = Vec::new();
+
+            let started = Instant::now();
             for i in 0..iters {
-                engine.process(black_box(Command::NewOrder {
-                    id: OrderId(10000 + i),
-                    instrument_id: 1,
-                    side: Side::Bid,
-                    price: 5000,
-                    qty: 1,
-                    order_type: OrderType::Limit,
-                    time_in_force: TimeInForce::GTC,
-                    visible_qty: None,
-                    stop_price: None,
-                    stp_group: None,
-                }));
+                let cmd = cancel_cmd(order_id);
+                order_id += 1;
+
+                let maybe_start = (i % stride == 0).then(Instant::now);
+                let events = engine.process(black_box(cmd));
+                black_box(events.len());
+
+                if let Some(t0) = maybe_start {
+                    samples.push(t0.elapsed().as_nanos() as u64);
+                }
             }
-            start.elapsed()
+            let elapsed = started.elapsed();
+            println!(
+                "[bench] core_process_only: {} (samples={})",
+                LatencySummary::from_samples(&samples),
+                samples.len()
+            );
+            elapsed
         });
     });
 }
 
-fn bench_cancel_order(c: &mut Criterion) {
-    c.bench_function("cancel_order", |b| {
-        let mut engine = MatchingEngine::new(config(), 65536);
-        // Pre-populate 10 000 resting bids spread across 1 000 price levels.
-        for i in 0u64..10000 {
-            engine.process(Command::NewOrder {
-                id: OrderId(i + 1),
-                instrument_id: 1,
-                side: Side::Bid,
-                price: 4000 + (i % 1000),
-                qty: 10,
-                order_type: OrderType::Limit,
-                time_in_force: TimeInForce::GTC,
-                visible_qty: None,
-                stop_price: None,
-                stp_group: None,
-            });
+fn bench_end_to_end_process_plus_enqueue(c: &mut Criterion) {
+    c.bench_function("end_to_end_process_plus_enqueue", |b| {
+        b.iter_custom(|iters| {
+            let dir = tempfile::tempdir().unwrap();
+            let prefix = dir.path().join("e2e");
+            let mut pipeline = EndToEndPipeline::new(config(), 65_536, journal_cfg(), &prefix)
+                .expect("pipeline init");
+            let mut order_id = 1_u64;
+            let stride = sample_stride(iters);
+            let mut samples = Vec::new();
+
+            let started = Instant::now();
+            for i in 0..iters {
+                let cmd = cancel_cmd(order_id);
+                order_id += 1;
+
+                let maybe_start = (i % stride == 0).then(Instant::now);
+                let events = process_with_retry(&mut pipeline, cmd);
+                black_box(events.len());
+
+                if let Some(t0) = maybe_start {
+                    samples.push(t0.elapsed().as_nanos() as u64);
+                }
+            }
+            let elapsed = started.elapsed();
+            println!(
+                "[bench] end_to_end_process_plus_enqueue: {} (samples={})",
+                LatencySummary::from_samples(&samples),
+                samples.len()
+            );
+            elapsed
+        });
+    });
+}
+
+fn bench_durability_lag_under_load(c: &mut Criterion) {
+    c.bench_function("durability_lag_under_load", |b| {
+        b.iter_custom(|iters| {
+            let dir = tempfile::tempdir().unwrap();
+            let prefix = dir.path().join("lag");
+            let mut pipeline = EndToEndPipeline::new(config(), 65_536, journal_cfg(), &prefix)
+                .expect("pipeline init");
+            let mut order_id = 1_u64;
+            let stride = sample_stride(iters);
+            let mut lag_samples = Vec::new();
+
+            let started = Instant::now();
+            for i in 0..iters {
+                let _events = process_with_retry(&mut pipeline, cancel_cmd(order_id));
+                order_id += 1;
+
+                if i % stride == 0 {
+                    lag_samples.push(
+                        pipeline
+                            .accepted_sequence()
+                            .saturating_sub(pipeline.durable_sequence()),
+                    );
+                }
+            }
+            let elapsed = started.elapsed();
+            println!(
+                "[bench] durability_lag_under_load: {} (samples={})",
+                LatencySummary::from_samples(&lag_samples),
+                lag_samples.len()
+            );
+            elapsed
+        });
+    });
+}
+
+fn process_with_retry(pipeline: &mut EndToEndPipeline, cmd: Command) -> Vec<MatchEvent> {
+    loop {
+        match pipeline.process(cmd.clone()) {
+            Ok(events) => return events,
+            Err(JournalError::QueueFull) => std::thread::yield_now(),
+            Err(err) => panic!("pipeline process failed: {err:?}"),
         }
-        let mut cancel_id = 1u64;
-        b.iter(|| {
-            engine.process(black_box(Command::CancelOrder {
-                id: OrderId(cancel_id),
-            }));
-            cancel_id += 1;
-        });
-    });
+    }
 }
 
-criterion_group!(benches, bench_insert_limit_order, bench_crossing_trade, bench_cancel_order);
+fn cancel_cmd(id: u64) -> Command {
+    Command::CancelOrder { id: OrderId(id) }
+}
+
+fn sample_stride(iters: u64) -> u64 {
+    (iters / 10_000).max(1)
+}
+
+criterion_group!(
+    benches,
+    bench_core_process_only,
+    bench_end_to_end_process_plus_enqueue,
+    bench_durability_lag_under_load
+);
 criterion_main!(benches);

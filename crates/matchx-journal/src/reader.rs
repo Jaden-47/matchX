@@ -1,8 +1,6 @@
-use std::fs::File;
-use std::io::Read;
-use std::path::Path;
-use matchx_types::Command;
 use crate::{JournalError, codec};
+use matchx_types::Command;
+use std::path::{Path, PathBuf};
 
 /// A single decoded journal record.
 pub struct JournalEntry {
@@ -12,70 +10,59 @@ pub struct JournalEntry {
 
 /// Sequential reader over a binary journal file.
 pub struct JournalReader {
-    file: File,
+    paths: Vec<PathBuf>,
 }
 
 impl JournalReader {
     pub fn open(path: &Path) -> Result<Self, JournalError> {
-        let file = File::open(path)?;
-        Ok(Self { file })
+        if path.is_dir() {
+            return Ok(Self {
+                paths: list_segment_paths(path)?,
+            });
+        }
+
+        // Preserve existing semantics: opening a missing file fails early.
+        let _ = std::fs::File::open(path)?;
+
+        Ok(Self {
+            paths: vec![path.to_path_buf()],
+        })
     }
 
     /// Read and validate every record in the file.
     /// Returns `Err(JournalError::CrcMismatch)` if any record is corrupt.
     pub fn read_all(&mut self) -> Result<Vec<JournalEntry>, JournalError> {
-        let mut data = Vec::new();
-        self.file.read_to_end(&mut data)?;
-
-        let mut pos = 0;
         let mut entries = Vec::new();
 
-        while pos < data.len() {
-            // payload_len
-            if pos + 4 > data.len() {
-                return Err(JournalError::InvalidData);
+        for path in &self.paths {
+            let data = std::fs::read(path)?;
+            let mut pos = 0;
+            while pos < data.len() {
+                let (sequence, command, used) = codec::decode_record(&data[pos..])?;
+                pos += used;
+                entries.push(JournalEntry { sequence, command });
             }
-            let payload_len =
-                u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
-            pos += 4;
-
-            // sequence
-            if pos + 8 > data.len() {
-                return Err(JournalError::InvalidData);
-            }
-            let sequence =
-                u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap());
-            pos += 8;
-
-            // payload
-            if pos + payload_len > data.len() {
-                return Err(JournalError::InvalidData);
-            }
-            let payload = &data[pos..pos + payload_len];
-            pos += payload_len;
-
-            // stored crc32
-            if pos + 4 > data.len() {
-                return Err(JournalError::InvalidData);
-            }
-            let stored_crc =
-                u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
-            pos += 4;
-
-            // Recompute CRC over sequence_bytes ++ payload_bytes
-            let mut crc_input = Vec::with_capacity(8 + payload_len);
-            crc_input.extend_from_slice(&sequence.to_le_bytes());
-            crc_input.extend_from_slice(payload);
-            let computed_crc = crc32fast::hash(&crc_input);
-
-            if computed_crc != stored_crc {
-                return Err(JournalError::CrcMismatch);
-            }
-
-            let command = codec::decode(payload)?;
-            entries.push(JournalEntry { sequence, command });
         }
 
         Ok(entries)
     }
+}
+
+pub(crate) fn list_segment_paths(dir: &Path) -> Result<Vec<PathBuf>, JournalError> {
+    let mut paths = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        if is_segment_file(&path) {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+fn is_segment_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.starts_with("journal-") && name.ends_with(".wal"))
+        .unwrap_or(false)
 }

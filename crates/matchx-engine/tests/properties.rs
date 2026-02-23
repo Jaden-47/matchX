@@ -1,6 +1,6 @@
-use proptest::prelude::*;
 use matchx_engine::MatchingEngine;
 use matchx_types::*;
+use proptest::prelude::*;
 
 fn test_config() -> InstrumentConfig {
     InstrumentConfig {

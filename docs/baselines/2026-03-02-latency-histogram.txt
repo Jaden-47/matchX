@@ -1,0 +1,25 @@
+=== Benchmark Environment ===
+Date: 2026-03-02
+RUSTFLAGS: -C target-cpu=native
+profile.bench: opt-level=3, codegen-units=1, lto=thin, debug=1
+rustc: rustc 1.93.1 (01f6ddf75 2026-02-11)
+kernel: 6.6.87.2-microsoft-standard-WSL2
+cpu: AMD Ryzen 7 7700 8-Core Processor
+Command: cargo bench --bench latency_histogram -- --nocapture
+Note: harness=false binary; reports p50/p99/p99.9/p99.99/max via hdrhistogram.
+==============================
+
+Running latency histogram (1000000 iterations)...
+Note: Run on bare metal with isolcpus for sub-µs p99 measurement.
+
+=== insert_limit_order (non-crossing) ===
+  samples :    1000000
+  p50     :         30 ns
+  p99     :        100 ns  ← SLO target: < 1000 ns on bare metal with isolcpus
+  p99.9   :       1493 ns
+  p99.99  :       3889 ns
+  max     :    1183743 ns
+  mean    :       34.0 ns
+  stddev  :     1381.9 ns
+
+✓ p99 < 10µs (100 ns) — dev machine baseline acceptable
