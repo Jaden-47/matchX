@@ -15,6 +15,32 @@ use policy::{MatchPolicy, PriceTimeFifo};
 /// 64 covers sweeping an entire book side in practice.
 const MAX_EVENTS_PER_CALL: usize = 64;
 
+// --- Compile-time safety invariants for the MaybeUninit event buffer ---
+
+// MaybeUninit<T> must be layout-identical to T (no tag, no padding overhead).
+const _: () = assert!(
+    core::mem::size_of::<MaybeUninit<MatchEvent>>() == core::mem::size_of::<MatchEvent>(),
+    "MaybeUninit<MatchEvent> must have the same size as MatchEvent"
+);
+const _: () = assert!(
+    core::mem::align_of::<MaybeUninit<MatchEvent>>() == core::mem::align_of::<MatchEvent>(),
+    "MaybeUninit<MatchEvent> must have the same alignment as MatchEvent"
+);
+
+// Buffer must not blow the stack. 64 events × ~120 bytes each ≈ 7.5 KB.
+const _: () = assert!(
+    core::mem::size_of::<[MaybeUninit<MatchEvent>; MAX_EVENTS_PER_CALL]>() <= 16 * 1024,
+    "event buffer exceeds 16 KB — reconsider MAX_EVENTS_PER_CALL"
+);
+
+// Capacity must cover worst-case non-cascading sweep:
+// 1 Accepted + 31 (Fill + BookUpdate) pairs + 1 remainder = 64.
+// If this fires, emit() will UB in release — increase MAX_EVENTS_PER_CALL.
+const _: () = assert!(
+    MAX_EVENTS_PER_CALL >= 64,
+    "MAX_EVENTS_PER_CALL too small for worst-case sweep"
+);
+
 /// Pending stop-limit order waiting for a trade price trigger.
 struct StopEntry {
     id: OrderId,
@@ -54,7 +80,9 @@ impl MatchingEngine {
             config,
             sequence: 0,
             timestamp_ns: 0,
-            // SAFETY: MaybeUninit array doesn't need initialization
+            // SAFETY: [MaybeUninit<T>; N] has no validity invariant — every bit
+            // pattern is valid for MaybeUninit, so an uninitialized array of
+            // MaybeUninit is sound. Layout equivalence proven by static asserts above.
             event_buf: unsafe { MaybeUninit::uninit().assume_init() },
             event_len: 0,
             stop_bids: Vec::new(),
@@ -77,7 +105,10 @@ impl MatchingEngine {
             "event buffer overflow: more than {} events in one process() call",
             MAX_EVENTS_PER_CALL
         );
-        // SAFETY: event_len < MAX_EVENTS_PER_CALL (checked above in debug builds).
+        // SAFETY: event_len < MAX_EVENTS_PER_CALL guaranteed by:
+        //   1. process() resets event_len = 0 at entry
+        //   2. worst-case single process() call emits ≤ 64 events (static assert above)
+        //   3. debug_assert guards above catches violations in test builds
         unsafe {
             self.event_buf[self.event_len].as_mut_ptr().write(event_fn(meta));
         }
@@ -126,6 +157,8 @@ impl MatchingEngine {
         }
         self.drain_stop_triggers();
         // SAFETY: the first `event_len` slots were written by `emit()`.
+        // The cast from *MaybeUninit<MatchEvent> to *MatchEvent is sound
+        // because MaybeUninit<T> is #[repr(transparent)] over T (static asserts above).
         unsafe {
             core::slice::from_raw_parts(
                 self.event_buf.as_ptr() as *const MatchEvent,
@@ -460,6 +493,8 @@ impl MatchingEngine {
                         StpMode::DecrementAndCancel => {
                             // Reduce both by the overlap quantity; cancel incoming.
                             let overlap = (*remaining).min(maker_remaining);
+                            debug_assert!(overlap <= *remaining, "overlap exceeds taker remaining");
+                            debug_assert!(overlap <= maker_remaining, "overlap exceeds maker remaining");
                             if maker_remaining == overlap {
                                 self.book.remove_order(maker_idx, &mut self.arena);
                             } else {
@@ -530,59 +565,68 @@ impl MatchingEngine {
     }
 
     /// Fire all pending stops whose trigger price has been crossed, then process
-    /// their triggered limit orders. Loops until no new stops are triggered.
+    /// their triggered limit orders. Loops until last_trade_price stabilizes,
+    /// ensuring cascading stops (A fills -> new price -> triggers B) work.
     #[inline(always)]
     fn drain_stop_triggers(&mut self) {
-        let Some(last_price) = self.last_trade_price else { return };
+        loop {
+            let Some(last_price) = self.last_trade_price else { return };
+            let prev_price = last_price;
 
-        // Drain buy stops: stop_bids is sorted ascending, trigger from front
-        // where stop_price <= last_price
-        while let Some((stop_px, _)) = self.stop_bids.first() {
-            if *stop_px > last_price { break; }
-            let (_, entry) = self.stop_bids.remove(0);
-            let stop_id = entry.id;
-            let new_order_id = entry.id;
-            self.emit(|meta| MatchEvent::StopTriggered {
-                meta,
-                stop_id,
-                new_order_id,
-            });
-            self.process_new_order(
-                entry.id,
-                entry.side,
-                entry.limit_price,
-                entry.qty,
-                OrderType::Limit,
-                entry.time_in_force,
-                entry.visible_qty,
-                None,
-                entry.stp_group,
-            );
-        }
+            // Drain buy stops: stop_bids is sorted ascending, trigger from front
+            // where stop_price <= last_price
+            while let Some((stop_px, _)) = self.stop_bids.first() {
+                if *stop_px > last_price { break; }
+                let (_, entry) = self.stop_bids.remove(0);
+                let stop_id = entry.id;
+                let new_order_id = entry.id;
+                self.emit(|meta| MatchEvent::StopTriggered {
+                    meta,
+                    stop_id,
+                    new_order_id,
+                });
+                self.process_new_order(
+                    entry.id,
+                    entry.side,
+                    entry.limit_price,
+                    entry.qty,
+                    OrderType::Limit,
+                    entry.time_in_force,
+                    entry.visible_qty,
+                    None,
+                    entry.stp_group,
+                );
+            }
 
-        // Drain sell stops: stop_asks is sorted descending, trigger from front
-        // where stop_price >= last_price
-        while let Some((stop_px, _)) = self.stop_asks.first() {
-            if *stop_px < last_price { break; }
-            let (_, entry) = self.stop_asks.remove(0);
-            let stop_id = entry.id;
-            let new_order_id = entry.id;
-            self.emit(|meta| MatchEvent::StopTriggered {
-                meta,
-                stop_id,
-                new_order_id,
-            });
-            self.process_new_order(
-                entry.id,
-                entry.side,
-                entry.limit_price,
-                entry.qty,
-                OrderType::Limit,
-                entry.time_in_force,
-                entry.visible_qty,
-                None,
-                entry.stp_group,
-            );
+            // Drain sell stops: stop_asks is sorted descending, trigger from front
+            // where stop_price >= last_price
+            while let Some((stop_px, _)) = self.stop_asks.first() {
+                if *stop_px < last_price { break; }
+                let (_, entry) = self.stop_asks.remove(0);
+                let stop_id = entry.id;
+                let new_order_id = entry.id;
+                self.emit(|meta| MatchEvent::StopTriggered {
+                    meta,
+                    stop_id,
+                    new_order_id,
+                });
+                self.process_new_order(
+                    entry.id,
+                    entry.side,
+                    entry.limit_price,
+                    entry.qty,
+                    OrderType::Limit,
+                    entry.time_in_force,
+                    entry.visible_qty,
+                    None,
+                    entry.stp_group,
+                );
+            }
+
+            // If the last trade price didn't change, no new stops can trigger.
+            if self.last_trade_price == Some(prev_price) {
+                break;
+            }
         }
     }
 
@@ -1630,5 +1674,102 @@ mod tests {
         // Our buffer is 64 — well within range
         assert!(events.len() >= 17, "expected at least 17 events, got {}", events.len());
         assert!(events.len() <= 64, "exceeded buffer capacity: {}", events.len());
+    }
+
+    #[test]
+    fn stop_cascade_triggers_second_stop_when_first_fills_past_threshold() {
+        let mut engine = MatchingEngine::new(test_config(), 4096);
+
+        // Place resting ask liquidity at prices 105 and 110.
+        engine.process(Command::NewOrder {
+            id: OrderId(10),
+            instrument_id: 1,
+            side: Side::Ask,
+            price: 105,
+            qty: 10,
+            order_type: OrderType::Limit,
+            time_in_force: TimeInForce::GTC,
+            visible_qty: None,
+            stop_price: None,
+            stp_group: None,
+        });
+        engine.process(Command::NewOrder {
+            id: OrderId(11),
+            instrument_id: 1,
+            side: Side::Ask,
+            price: 110,
+            qty: 10,
+            order_type: OrderType::Limit,
+            time_in_force: TimeInForce::GTC,
+            visible_qty: None,
+            stop_price: None,
+            stp_group: None,
+        });
+
+        // Stop buy A: triggers at 100, limit at 115 (will sweep asks at 105 and 110).
+        engine.process(Command::NewOrder {
+            id: OrderId(1),
+            instrument_id: 1,
+            side: Side::Bid,
+            price: 115,
+            qty: 20,
+            order_type: OrderType::StopLimit,
+            time_in_force: TimeInForce::GTC,
+            visible_qty: None,
+            stop_price: Some(100),
+            stp_group: None,
+        });
+
+        // Stop buy B: triggers at 108 — should cascade after A fills at 105+.
+        engine.process(Command::NewOrder {
+            id: OrderId(2),
+            instrument_id: 1,
+            side: Side::Bid,
+            price: 120,
+            qty: 5,
+            order_type: OrderType::StopLimit,
+            time_in_force: TimeInForce::GTC,
+            visible_qty: None,
+            stop_price: Some(108),
+            stp_group: None,
+        });
+
+        // Place resting ask + buy that will trade at 100 to trigger stop A.
+        engine.process(Command::NewOrder {
+            id: OrderId(20),
+            instrument_id: 1,
+            side: Side::Ask,
+            price: 100,
+            qty: 5,
+            order_type: OrderType::Limit,
+            time_in_force: TimeInForce::GTC,
+            visible_qty: None,
+            stop_price: None,
+            stp_group: None,
+        });
+        let events = engine.process(Command::NewOrder {
+            id: OrderId(21),
+            instrument_id: 1,
+            side: Side::Bid,
+            price: 100,
+            qty: 5,
+            order_type: OrderType::Limit,
+            time_in_force: TimeInForce::GTC,
+            visible_qty: None,
+            stop_price: None,
+            stp_group: None,
+        });
+
+        // Both stops should have triggered.
+        let stop_triggers: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, MatchEvent::StopTriggered { .. }))
+            .collect();
+        assert!(
+            stop_triggers.len() >= 2,
+            "Expected 2 stop triggers (cascade), got {}. Events: {:?}",
+            stop_triggers.len(),
+            events
+        );
     }
 }

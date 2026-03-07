@@ -24,6 +24,8 @@ pub struct Arena {
     free_head: u32,
     len: u32,
     capacity: u32,
+    #[cfg(debug_assertions)]
+    generation: Vec<u64>,
 }
 
 impl Arena {
@@ -40,6 +42,8 @@ impl Arena {
             free_head: if capacity > 0 { 0 } else { FREE_LIST_END },
             len: 0,
             capacity,
+            #[cfg(debug_assertions)]
+            generation: alloc::vec![0u64; cap],
         }
     }
 
@@ -54,6 +58,10 @@ impl Arena {
         // SAFETY: slot `idx` is free (taken from free list); we have exclusive access.
         unsafe { self.data[idx as usize].as_mut_ptr().write(order) };
         self.len += 1;
+        #[cfg(debug_assertions)]
+        {
+            self.generation[idx as usize] += 1;
+        }
         Some(ArenaIndex(idx))
     }
 
@@ -64,6 +72,16 @@ impl Arena {
     #[inline]
     pub fn free(&mut self, index: ArenaIndex) {
         let idx = index.0;
+        #[cfg(debug_assertions)]
+        {
+            assert!(
+                self.generation[idx as usize] % 2 == 1,
+                "double-free: slot {} has generation {} (already free)",
+                idx,
+                self.generation[idx as usize]
+            );
+            self.generation[idx as usize] += 1;
+        }
         // SAFETY: caller guarantees slot is occupied.
         unsafe { self.data[idx as usize].assume_init_drop() };
         self.next_free[idx as usize] = self.free_head;
@@ -77,6 +95,15 @@ impl Arena {
     /// The caller must ensure `index` refers to an occupied slot.
     #[inline]
     pub fn get(&self, index: ArenaIndex) -> &Order {
+        #[cfg(debug_assertions)]
+        {
+            assert!(
+                self.generation[index.as_usize()] % 2 == 1,
+                "use-after-free: slot {} has generation {} (freed)",
+                index.0,
+                self.generation[index.as_usize()]
+            );
+        }
         // SAFETY: caller guarantees slot is occupied.
         unsafe { self.data[index.as_usize()].assume_init_ref() }
     }
@@ -87,6 +114,15 @@ impl Arena {
     /// The caller must ensure `index` refers to an occupied slot.
     #[inline]
     pub fn get_mut(&mut self, index: ArenaIndex) -> &mut Order {
+        #[cfg(debug_assertions)]
+        {
+            assert!(
+                self.generation[index.as_usize()] % 2 == 1,
+                "use-after-free: slot {} has generation {} (freed)",
+                index.0,
+                self.generation[index.as_usize()]
+            );
+        }
         // SAFETY: caller guarantees slot is occupied.
         unsafe { self.data[index.as_usize()].assume_init_mut() }
     }
@@ -316,5 +352,25 @@ mod tests {
     #[test]
     fn slot_size_is_exactly_64_bytes() {
         assert_eq!(core::mem::size_of::<Order>(), 64);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "use-after-free")]
+    fn debug_detects_use_after_free() {
+        let mut arena = Arena::new(4);
+        let idx = arena.alloc(make_order(1)).unwrap();
+        arena.free(idx);
+        let _ = arena.get(idx);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "double-free")]
+    fn debug_detects_double_free() {
+        let mut arena = Arena::new(4);
+        let idx = arena.alloc(make_order(1)).unwrap();
+        arena.free(idx);
+        arena.free(idx);
     }
 }

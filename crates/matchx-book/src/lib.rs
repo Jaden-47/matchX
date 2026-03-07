@@ -36,7 +36,12 @@ impl FenwickTree {
     pub fn sub(&mut self, index: usize, delta: u64) {
         let mut i = index + 1;
         while i < self.data.len() {
-            self.data[i] = self.data[i].checked_sub(delta).expect("fenwick underflow");
+            debug_assert!(
+                self.data[i] >= delta,
+                "fenwick underflow at node {}: {} < {}",
+                i, self.data[i], delta
+            );
+            self.data[i] = self.data[i].saturating_sub(delta);
             i += i & i.wrapping_neg();
         }
     }
@@ -330,6 +335,11 @@ impl OrderBook {
         if let Some(i) = self.dense_index(price) {
             &self.bids_dense[i]
         } else {
+            debug_assert!(
+                self.bids_sparse.contains_key(&price),
+                "get_bid_level: price {} not in sparse map — BBO invariant violated",
+                price
+            );
             self.bids_sparse.get(&price).expect("missing bid level")
         }
     }
@@ -338,6 +348,11 @@ impl OrderBook {
         if let Some(i) = self.dense_index(price) {
             &self.asks_dense[i]
         } else {
+            debug_assert!(
+                self.asks_sparse.contains_key(&price),
+                "get_ask_level: price {} not in sparse map — BBO invariant violated",
+                price
+            );
             self.asks_sparse.get(&price).expect("missing ask level")
         }
     }
