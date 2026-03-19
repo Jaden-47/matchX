@@ -28,6 +28,10 @@ pub fn decode_record(data: &[u8]) -> Result<(u64, Command, usize), JournalError>
         return Err(JournalError::InvalidData);
     }
     let payload_len = u32::from_le_bytes(data[0..4].try_into().unwrap()) as usize;
+    // Reject obviously invalid payload lengths to prevent overflow on 32-bit.
+    if payload_len > 1 << 20 {
+        return Err(JournalError::InvalidData);
+    }
     let required = 4 + 8 + payload_len + 4;
     if data.len() < required {
         return Err(JournalError::InvalidData);
@@ -263,6 +267,13 @@ mod tests {
         assert_eq!(seq, 7);
         assert_eq!(super::encode(&cmd), super::encode(&expected_cmd));
         assert_eq!(used, bytes.len());
+    }
+
+    #[test]
+    fn rejects_oversized_payload_len() {
+        let mut data = vec![0u8; 16];
+        data[0..4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(decode_record(&data).is_err());
     }
 
     fn sample_new_order() -> Command {

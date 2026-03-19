@@ -15,6 +15,14 @@ baseline:
 bench:
 	cargo bench
 
+# Lint with Clippy (deny warnings)
+lint:
+	cargo clippy --workspace --all-targets -- -D warnings
+
+# Run Miri for unsafe validation (requires nightly)
+miri:
+	cargo +nightly miri test --workspace
+
 # Run latency histogram benchmark (no RT scheduling)
 latency:
 	cargo bench --bench latency_histogram -- --nocapture

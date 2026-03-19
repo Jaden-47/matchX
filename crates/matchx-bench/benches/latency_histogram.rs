@@ -26,8 +26,8 @@ fn config() -> InstrumentConfig {
 
 /// Measures per-call latency of inserting a non-crossing limit order.
 fn bench_insert_latency(iters: u64) -> Histogram<u64> {
-    let mut hist = Histogram::<u64>::new_with_bounds(1, 10_000_000, 3)
-        .expect("valid histogram bounds");
+    let mut hist =
+        Histogram::<u64>::new_with_bounds(1, 10_000_000, 3).expect("valid histogram bounds");
     let mut engine = MatchingEngine::new(config(), 65536);
     let mut id = 1u64;
 
@@ -90,7 +90,10 @@ fn print_histogram(label: &str, hist: &Histogram<u64>) {
     println!("\n=== {} ===", label);
     println!("  samples : {:>10}", hist.len());
     println!("  p50     : {:>10} ns", hist.value_at_quantile(0.50));
-    println!("  p99     : {:>10} ns  ← SLO target: < 1000 ns on bare metal with isolcpus", hist.value_at_quantile(0.99));
+    println!(
+        "  p99     : {:>10} ns  ← SLO target: < 1000 ns on bare metal with isolcpus",
+        hist.value_at_quantile(0.99)
+    );
     println!("  p99.9   : {:>10} ns", hist.value_at_quantile(0.999));
     println!("  p99.99  : {:>10} ns", hist.value_at_quantile(0.9999));
     println!("  max     : {:>10} ns", hist.max());
@@ -109,8 +112,14 @@ fn main() {
     // Simple pass/fail against 10µs target (achievable even on dev machine/WSL2)
     let p99_ns = hist.value_at_quantile(0.99);
     if p99_ns < 10_000 {
-        println!("\n✓ p99 < 10µs ({} ns) — dev machine baseline acceptable", p99_ns);
+        println!(
+            "\n✓ p99 < 10µs ({} ns) — dev machine baseline acceptable",
+            p99_ns
+        );
     } else {
-        println!("\n⚠ p99 = {} ns — check for OS jitter or run on bare metal", p99_ns);
+        println!(
+            "\n⚠ p99 = {} ns — check for OS jitter or run on bare metal",
+            p99_ns
+        );
     }
 }

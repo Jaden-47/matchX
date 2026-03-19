@@ -43,6 +43,22 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+  miri:
+    name: Miri (unsafe validation)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly toolchain with Miri
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+
+      - name: Run Miri on workspace
+        run: cargo +nightly miri test --workspace
+        env:
+          MIRIFLAGS: "-Zmiri-disable-isolation"
+
   bench-compile:
     name: Benchmarks compile
     runs-on: ubuntu-latest

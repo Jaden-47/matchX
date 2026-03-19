@@ -110,7 +110,9 @@ impl MatchingEngine {
         //   2. worst-case single process() call emits ≤ 64 events (static assert above)
         //   3. debug_assert guards above catches violations in test builds
         unsafe {
-            self.event_buf[self.event_len].as_mut_ptr().write(event_fn(meta));
+            self.event_buf[self.event_len]
+                .as_mut_ptr()
+                .write(event_fn(meta));
         }
         self.event_len += 1;
     }
@@ -304,17 +306,16 @@ impl MatchingEngine {
         }
 
         // --- STP CancelNewest: reject before accepting if first maker matches group ---
-        if let Some(taker_stp) = stp_group {
-            if self.config.stp_mode == StpMode::CancelNewest
-                && self.stp_first_maker_matches(side, effective_price, taker_stp)
-            {
-                self.emit(|meta| MatchEvent::OrderRejected {
-                    meta,
-                    id,
-                    reason: RejectReason::SelfTradePreventionTriggered,
-                });
-                return;
-            }
+        if let Some(taker_stp) = stp_group
+            && self.config.stp_mode == StpMode::CancelNewest
+            && self.stp_first_maker_matches(side, effective_price, taker_stp)
+        {
+            self.emit(|meta| MatchEvent::OrderRejected {
+                meta,
+                id,
+                reason: RejectReason::SelfTradePreventionTriggered,
+            });
+            return;
         }
 
         // --- Accept ---
@@ -449,68 +450,72 @@ impl MatchingEngine {
             let maker_stp = self.arena.get(maker_idx).stp_group;
 
             // --- Self-Trade Prevention ---
-            if let Some(ts) = taker_stp {
-                if maker_stp != STP_NONE && ts == maker_stp {
-                    match self.config.stp_mode {
-                        StpMode::CancelNewest => {
-                            // Should have been caught by pre-check; stop matching silently.
-                            break;
-                        }
-                        StpMode::CancelOldest => {
-                            // Cancel the resting (oldest) order; incoming continues.
+            if let Some(ts) = taker_stp
+                && maker_stp != STP_NONE
+                && ts == maker_stp
+            {
+                match self.config.stp_mode {
+                    StpMode::CancelNewest => {
+                        // Should have been caught by pre-check; stop matching silently.
+                        break;
+                    }
+                    StpMode::CancelOldest => {
+                        // Cancel the resting (oldest) order; incoming continues.
+                        self.book.remove_order(maker_idx, &mut self.arena);
+                        self.emit(|meta| MatchEvent::OrderCancelled {
+                            meta,
+                            id: maker_id,
+                            remaining_qty: maker_remaining,
+                        });
+                        let level_qty = self.book.get_level_qty(maker_side, resting_price);
+                        self.emit(|meta| MatchEvent::BookUpdate {
+                            meta,
+                            side: maker_side,
+                            price: resting_price,
+                            qty: level_qty,
+                        });
+                        continue;
+                    }
+                    StpMode::CancelBoth => {
+                        // Cancel resting maker, then signal to cancel incoming.
+                        self.book.remove_order(maker_idx, &mut self.arena);
+                        self.emit(|meta| MatchEvent::OrderCancelled {
+                            meta,
+                            id: maker_id,
+                            remaining_qty: maker_remaining,
+                        });
+                        let level_qty = self.book.get_level_qty(maker_side, resting_price);
+                        self.emit(|meta| MatchEvent::BookUpdate {
+                            meta,
+                            side: maker_side,
+                            price: resting_price,
+                            qty: level_qty,
+                        });
+                        return true;
+                    }
+                    StpMode::DecrementAndCancel => {
+                        // Reduce both by the overlap quantity; cancel incoming.
+                        let overlap = (*remaining).min(maker_remaining);
+                        debug_assert!(overlap <= *remaining, "overlap exceeds taker remaining");
+                        debug_assert!(
+                            overlap <= maker_remaining,
+                            "overlap exceeds maker remaining"
+                        );
+                        if maker_remaining == overlap {
                             self.book.remove_order(maker_idx, &mut self.arena);
-                            self.emit(|meta| MatchEvent::OrderCancelled {
-                                meta,
-                                id: maker_id,
-                                remaining_qty: maker_remaining,
-                            });
-                            let level_qty = self.book.get_level_qty(maker_side, resting_price);
-                            self.emit(|meta| MatchEvent::BookUpdate {
-                                meta,
-                                side: maker_side,
-                                price: resting_price,
-                                qty: level_qty,
-                            });
-                            continue;
+                        } else {
+                            self.book
+                                .reduce_order_qty(maker_idx, overlap, &mut self.arena);
                         }
-                        StpMode::CancelBoth => {
-                            // Cancel resting maker, then signal to cancel incoming.
-                            self.book.remove_order(maker_idx, &mut self.arena);
-                            self.emit(|meta| MatchEvent::OrderCancelled {
-                                meta,
-                                id: maker_id,
-                                remaining_qty: maker_remaining,
-                            });
-                            let level_qty = self.book.get_level_qty(maker_side, resting_price);
-                            self.emit(|meta| MatchEvent::BookUpdate {
-                                meta,
-                                side: maker_side,
-                                price: resting_price,
-                                qty: level_qty,
-                            });
-                            return true;
-                        }
-                        StpMode::DecrementAndCancel => {
-                            // Reduce both by the overlap quantity; cancel incoming.
-                            let overlap = (*remaining).min(maker_remaining);
-                            debug_assert!(overlap <= *remaining, "overlap exceeds taker remaining");
-                            debug_assert!(overlap <= maker_remaining, "overlap exceeds maker remaining");
-                            if maker_remaining == overlap {
-                                self.book.remove_order(maker_idx, &mut self.arena);
-                            } else {
-                                self.book
-                                    .reduce_order_qty(maker_idx, overlap, &mut self.arena);
-                            }
-                            let level_qty = self.book.get_level_qty(maker_side, resting_price);
-                            self.emit(|meta| MatchEvent::BookUpdate {
-                                meta,
-                                side: maker_side,
-                                price: resting_price,
-                                qty: level_qty,
-                            });
-                            *remaining -= overlap;
-                            return true;
-                        }
+                        let level_qty = self.book.get_level_qty(maker_side, resting_price);
+                        self.emit(|meta| MatchEvent::BookUpdate {
+                            meta,
+                            side: maker_side,
+                            price: resting_price,
+                            qty: level_qty,
+                        });
+                        *remaining -= overlap;
+                        return true;
                     }
                 }
             }
@@ -570,13 +575,17 @@ impl MatchingEngine {
     #[inline(always)]
     fn drain_stop_triggers(&mut self) {
         loop {
-            let Some(last_price) = self.last_trade_price else { return };
+            let Some(last_price) = self.last_trade_price else {
+                return;
+            };
             let prev_price = last_price;
 
             // Drain buy stops: stop_bids is sorted ascending, trigger from front
             // where stop_price <= last_price
             while let Some((stop_px, _)) = self.stop_bids.first() {
-                if *stop_px > last_price { break; }
+                if *stop_px > last_price {
+                    break;
+                }
                 let (_, entry) = self.stop_bids.remove(0);
                 let stop_id = entry.id;
                 let new_order_id = entry.id;
@@ -601,7 +610,9 @@ impl MatchingEngine {
             // Drain sell stops: stop_asks is sorted descending, trigger from front
             // where stop_price >= last_price
             while let Some((stop_px, _)) = self.stop_asks.first() {
-                if *stop_px < last_price { break; }
+                if *stop_px < last_price {
+                    break;
+                }
                 let (_, entry) = self.stop_asks.remove(0);
                 let stop_id = entry.id;
                 let new_order_id = entry.id;
@@ -718,6 +729,23 @@ impl MatchingEngine {
     #[inline]
     pub fn best_ask(&self) -> Option<u64> {
         self.book.best_ask()
+    }
+
+    /// Capture a minimal snapshot of engine metadata.
+    /// Returns (sequence, timestamp_ns, last_trade_price_or_0).
+    /// Full state reconstruction uses journal replay from this sequence.
+    pub fn snapshot(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(24);
+        buf.extend_from_slice(&self.sequence.to_le_bytes());
+        buf.extend_from_slice(&self.timestamp_ns.to_le_bytes());
+        buf.extend_from_slice(&self.last_trade_price.unwrap_or(0).to_le_bytes());
+        buf
+    }
+
+    /// Current sequence number (for snapshot coordination with journal).
+    #[inline]
+    pub fn current_sequence(&self) -> u64 {
+        self.sequence
     }
 }
 
@@ -1634,9 +1662,19 @@ mod tests {
         });
         // The stop should have triggered: StopTriggered event must be present
         let triggered = events.iter().any(|e| {
-            matches!(e, MatchEvent::StopTriggered { stop_id: OrderId(2), .. })
+            matches!(
+                e,
+                MatchEvent::StopTriggered {
+                    stop_id: OrderId(2),
+                    ..
+                }
+            )
         });
-        assert!(triggered, "expected StopTriggered event for OrderId(2), got: {:?}", events);
+        assert!(
+            triggered,
+            "expected StopTriggered event for OrderId(2), got: {:?}",
+            events
+        );
     }
 
     #[test]
@@ -1672,8 +1710,16 @@ mod tests {
         });
         // Should have: 1 Accepted + 16 Fills + up to 16 BookUpdates = max ~33 events
         // Our buffer is 64 — well within range
-        assert!(events.len() >= 17, "expected at least 17 events, got {}", events.len());
-        assert!(events.len() <= 64, "exceeded buffer capacity: {}", events.len());
+        assert!(
+            events.len() >= 17,
+            "expected at least 17 events, got {}",
+            events.len()
+        );
+        assert!(
+            events.len() <= 64,
+            "exceeded buffer capacity: {}",
+            events.len()
+        );
     }
 
     #[test]
@@ -1771,5 +1817,309 @@ mod tests {
             stop_triggers.len(),
             events
         );
+    }
+
+    // ---- Task 7 (new): STP Mode Tests ----
+
+    #[test]
+    fn stp_cancel_oldest_cancels_resting_maker() {
+        let cfg = InstrumentConfig {
+            stp_mode: StpMode::CancelOldest,
+            ..test_config()
+        };
+        let mut engine = MatchingEngine::new(cfg, 1024);
+
+        engine.process(Command::NewOrder {
+            id: OrderId(1),
+            instrument_id: 1,
+            side: Side::Ask,
+            price: 100,
+            qty: 10,
+            order_type: OrderType::Limit,
+            time_in_force: TimeInForce::GTC,
+            visible_qty: None,
+            stop_price: None,
+            stp_group: Some(1),
+        });
+
+        let events = engine.process(Command::NewOrder {
+            id: OrderId(2),
+            instrument_id: 1,
+            side: Side::Bid,
+            price: 100,
+            qty: 5,
+            order_type: OrderType::Limit,
+            time_in_force: TimeInForce::GTC,
+            visible_qty: None,
+            stop_price: None,
+            stp_group: Some(1),
+        });
+
+        // Maker (oldest) should be cancelled. No fills.
+        assert!(events.iter().any(|e| matches!(
+            e,
+            MatchEvent::OrderCancelled {
+                id: OrderId(1),
+                remaining_qty: 10,
+                ..
+            }
+        )));
+        assert!(!events.iter().any(|e| matches!(e, MatchEvent::Fill { .. })));
+        assert_eq!(engine.best_bid(), Some(100)); // taker rests
+    }
+
+    #[test]
+    fn stp_cancel_both_cancels_maker_and_taker() {
+        let cfg = InstrumentConfig {
+            stp_mode: StpMode::CancelBoth,
+            ..test_config()
+        };
+        let mut engine = MatchingEngine::new(cfg, 1024);
+
+        engine.process(Command::NewOrder {
+            id: OrderId(1),
+            instrument_id: 1,
+            side: Side::Ask,
+            price: 100,
+            qty: 10,
+            order_type: OrderType::Limit,
+            time_in_force: TimeInForce::GTC,
+            visible_qty: None,
+            stop_price: None,
+            stp_group: Some(1),
+        });
+
+        let events = engine.process(Command::NewOrder {
+            id: OrderId(2),
+            instrument_id: 1,
+            side: Side::Bid,
+            price: 100,
+            qty: 5,
+            order_type: OrderType::Limit,
+            time_in_force: TimeInForce::GTC,
+            visible_qty: None,
+            stop_price: None,
+            stp_group: Some(1),
+        });
+
+        let cancels: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, MatchEvent::OrderCancelled { .. }))
+            .collect();
+        assert_eq!(cancels.len(), 2, "Expected both maker and taker cancelled");
+        assert!(!events.iter().any(|e| matches!(e, MatchEvent::Fill { .. })));
+        assert_eq!(engine.best_bid(), None);
+        assert_eq!(engine.best_ask(), None);
+    }
+
+    #[test]
+    fn stp_decrement_and_cancel_reduces_both_sides() {
+        let cfg = InstrumentConfig {
+            stp_mode: StpMode::DecrementAndCancel,
+            ..test_config()
+        };
+        let mut engine = MatchingEngine::new(cfg, 1024);
+
+        engine.process(Command::NewOrder {
+            id: OrderId(1),
+            instrument_id: 1,
+            side: Side::Ask,
+            price: 100,
+            qty: 10,
+            order_type: OrderType::Limit,
+            time_in_force: TimeInForce::GTC,
+            visible_qty: None,
+            stop_price: None,
+            stp_group: Some(1),
+        });
+
+        // Incoming bid: 3 qty, same group. overlap = min(3, 10) = 3.
+        let events: alloc::vec::Vec<MatchEvent> = engine
+            .process(Command::NewOrder {
+                id: OrderId(2),
+                instrument_id: 1,
+                side: Side::Bid,
+                price: 100,
+                qty: 3,
+                order_type: OrderType::Limit,
+                time_in_force: TimeInForce::GTC,
+                visible_qty: None,
+                stop_price: None,
+                stp_group: Some(1),
+            })
+            .to_vec();
+
+        // Taker cancelled with remaining 0 (3 - 3 = 0).
+        assert!(events.iter().any(|e| matches!(
+            e,
+            MatchEvent::OrderCancelled {
+                id: OrderId(2),
+                remaining_qty: 0,
+                ..
+            }
+        )));
+        // Maker still on book with reduced qty (10 - 3 = 7).
+        assert_eq!(engine.best_ask(), Some(100));
+        assert!(!events.iter().any(|e| matches!(e, MatchEvent::Fill { .. })));
+    }
+
+    // ---- Task 8: Modify Order Tests ----
+
+    #[test]
+    fn modify_order_changes_price_and_qty() {
+        let mut engine = MatchingEngine::new(test_config(), 1024);
+
+        engine.process(Command::NewOrder {
+            id: OrderId(1),
+            instrument_id: 1,
+            side: Side::Bid,
+            price: 100,
+            qty: 10,
+            order_type: OrderType::Limit,
+            time_in_force: TimeInForce::GTC,
+            visible_qty: None,
+            stop_price: None,
+            stp_group: None,
+        });
+        assert_eq!(engine.best_bid(), Some(100));
+
+        let events = engine.process(Command::ModifyOrder {
+            id: OrderId(1),
+            new_price: 105,
+            new_qty: 20,
+        });
+
+        assert!(events.iter().any(|e| matches!(
+            e,
+            MatchEvent::OrderModified {
+                id: OrderId(1),
+                new_price: 105,
+                new_qty: 20,
+                ..
+            }
+        )));
+        assert_eq!(engine.best_bid(), Some(105));
+    }
+
+    #[test]
+    fn modify_to_crossing_price_triggers_match() {
+        let mut engine = MatchingEngine::new(test_config(), 1024);
+
+        engine.process(Command::NewOrder {
+            id: OrderId(1),
+            instrument_id: 1,
+            side: Side::Ask,
+            price: 100,
+            qty: 5,
+            order_type: OrderType::Limit,
+            time_in_force: TimeInForce::GTC,
+            visible_qty: None,
+            stop_price: None,
+            stp_group: None,
+        });
+        engine.process(Command::NewOrder {
+            id: OrderId(2),
+            instrument_id: 1,
+            side: Side::Bid,
+            price: 90,
+            qty: 10,
+            order_type: OrderType::Limit,
+            time_in_force: TimeInForce::GTC,
+            visible_qty: None,
+            stop_price: None,
+            stp_group: None,
+        });
+
+        let events = engine.process(Command::ModifyOrder {
+            id: OrderId(2),
+            new_price: 100,
+            new_qty: 10,
+        });
+
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, MatchEvent::Fill { qty: 5, .. }))
+        );
+    }
+
+    // ---- Task 9: Iceberg Replenishment Test ----
+
+    #[test]
+    fn iceberg_exposes_visible_slice_then_replenishes() {
+        let mut engine = MatchingEngine::new(test_config(), 1024);
+
+        // Iceberg ask: 30 total, visible 10 at a time.
+        engine.process(Command::NewOrder {
+            id: OrderId(1),
+            instrument_id: 1,
+            side: Side::Ask,
+            price: 100,
+            qty: 30,
+            order_type: OrderType::Iceberg,
+            time_in_force: TimeInForce::GTC,
+            visible_qty: Some(10),
+            stop_price: None,
+            stp_group: None,
+        });
+
+        // First buy: takes 10 (first visible slice).
+        let events1 = engine.process(Command::NewOrder {
+            id: OrderId(2),
+            instrument_id: 1,
+            side: Side::Bid,
+            price: 100,
+            qty: 10,
+            order_type: OrderType::Limit,
+            time_in_force: TimeInForce::GTC,
+            visible_qty: None,
+            stop_price: None,
+            stp_group: None,
+        });
+        assert!(
+            events1
+                .iter()
+                .any(|e| matches!(e, MatchEvent::Fill { qty: 10, .. }))
+        );
+
+        // Second buy: takes 10 (second slice -- replenished).
+        let events2 = engine.process(Command::NewOrder {
+            id: OrderId(3),
+            instrument_id: 1,
+            side: Side::Bid,
+            price: 100,
+            qty: 10,
+            order_type: OrderType::Limit,
+            time_in_force: TimeInForce::GTC,
+            visible_qty: None,
+            stop_price: None,
+            stp_group: None,
+        });
+        assert!(
+            events2
+                .iter()
+                .any(|e| matches!(e, MatchEvent::Fill { qty: 10, .. }))
+        );
+
+        // Third buy: takes last 10.
+        let events3 = engine.process(Command::NewOrder {
+            id: OrderId(4),
+            instrument_id: 1,
+            side: Side::Bid,
+            price: 100,
+            qty: 10,
+            order_type: OrderType::Limit,
+            time_in_force: TimeInForce::GTC,
+            visible_qty: None,
+            stop_price: None,
+            stp_group: None,
+        });
+        assert!(
+            events3
+                .iter()
+                .any(|e| matches!(e, MatchEvent::Fill { qty: 10, .. }))
+        );
+
+        assert_eq!(engine.best_ask(), None); // fully consumed
     }
 }

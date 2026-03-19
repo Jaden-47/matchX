@@ -2,11 +2,13 @@ mod async_journal;
 mod codec;
 mod reader;
 mod recovery;
+mod streaming_reader;
 mod writer;
 
 pub use async_journal::{AsyncJournal, AsyncJournalConfig};
 pub use reader::{JournalEntry, JournalReader};
 pub use recovery::{RecoveryManager, RecoveryReport};
+pub use streaming_reader::StreamingReader;
 pub use writer::JournalWriter;
 
 /// Errors produced by journal operations.
@@ -139,5 +141,31 @@ mod tests {
 
     fn cancel_cmd(id: u64) -> Command {
         Command::CancelOrder { id: OrderId(id) }
+    }
+
+    #[test]
+    fn streaming_reader_matches_batch_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut writer = JournalWriter::open_segmented(dir.path(), 128).unwrap();
+        for seq in 1..=20 {
+            writer.append(seq, &cancel_cmd(seq)).unwrap();
+        }
+        drop(writer);
+
+        // Batch reader
+        let mut batch = JournalReader::open(dir.path()).unwrap();
+        let batch_entries = batch.read_all().unwrap();
+
+        // Streaming reader
+        let mut streaming = StreamingReader::open(dir.path()).unwrap();
+        let mut streaming_entries = Vec::new();
+        while let Some(entry) = streaming.next_entry().unwrap() {
+            streaming_entries.push(entry);
+        }
+
+        assert_eq!(batch_entries.len(), streaming_entries.len());
+        for (b, s) in batch_entries.iter().zip(streaming_entries.iter()) {
+            assert_eq!(b.sequence, s.sequence);
+        }
     }
 }

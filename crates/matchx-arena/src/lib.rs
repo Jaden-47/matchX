@@ -34,7 +34,11 @@ impl Arena {
         let cap = capacity as usize;
         let mut next_free = Vec::with_capacity(cap);
         for i in 0..capacity {
-            next_free.push(if i + 1 < capacity { i + 1 } else { FREE_LIST_END });
+            next_free.push(if i + 1 < capacity {
+                i + 1
+            } else {
+                FREE_LIST_END
+            });
         }
         Self {
             data: (0..cap).map(|_| MaybeUninit::uninit()).collect(),
@@ -150,9 +154,9 @@ unsafe impl Send for Arena {}
 
 #[cfg(all(feature = "huge_pages", target_os = "linux"))]
 mod huge {
+    use alloc::vec::Vec;
     use core::mem::MaybeUninit;
     use matchx_types::{ArenaIndex, Order};
-    use alloc::vec::Vec;
 
     const FREE_LIST_END: u32 = u32::MAX;
     // MAP_HUGE_SHIFT = 26 per Linux kernel (not always exported by libc crate)
@@ -184,8 +188,7 @@ mod huge {
                 const MAP_HUGETLB: i32 = 0x40000;
                 const MAP_FAILED: *mut libc::c_void = !0usize as *mut libc::c_void;
 
-                let huge_flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB
-                    | (21 << MAP_HUGE_SHIFT);
+                let huge_flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | (21 << MAP_HUGE_SHIFT);
                 let p = libc::mmap(
                     core::ptr::null_mut(),
                     mmap_len,
@@ -214,7 +217,11 @@ mod huge {
             let cap = capacity as usize;
             let mut next_free = Vec::with_capacity(cap);
             for i in 0..capacity {
-                next_free.push(if i + 1 < capacity { i + 1 } else { FREE_LIST_END });
+                next_free.push(if i + 1 < capacity {
+                    i + 1
+                } else {
+                    FREE_LIST_END
+                });
             }
 
             Self {
@@ -229,7 +236,9 @@ mod huge {
 
         #[inline]
         pub fn alloc(&mut self, order: Order) -> Option<ArenaIndex> {
-            if self.free_head == FREE_LIST_END { return None; }
+            if self.free_head == FREE_LIST_END {
+                return None;
+            }
             let idx = self.free_head;
             self.free_head = self.next_free[idx as usize];
             // SAFETY: slot idx is free; we have exclusive access.
@@ -260,9 +269,15 @@ mod huge {
             unsafe { (*self.data.add(index.as_usize())).assume_init_mut() }
         }
 
-        pub fn len(&self) -> u32 { self.len }
-        pub fn is_empty(&self) -> bool { self.len == 0 }
-        pub fn capacity(&self) -> u32 { self.capacity }
+        pub fn len(&self) -> u32 {
+            self.len
+        }
+        pub fn is_empty(&self) -> bool {
+            self.len == 0
+        }
+        pub fn capacity(&self) -> u32 {
+            self.capacity
+        }
     }
 
     impl Drop for HugePageArena {

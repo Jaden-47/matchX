@@ -39,7 +39,9 @@ impl FenwickTree {
             debug_assert!(
                 self.data[i] >= delta,
                 "fenwick underflow at node {}: {} < {}",
-                i, self.data[i], delta
+                i,
+                self.data[i],
+                delta
             );
             self.data[i] = self.data[i].saturating_sub(delta);
             i += i & i.wrapping_neg();
