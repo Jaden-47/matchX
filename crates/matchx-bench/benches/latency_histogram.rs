@@ -33,7 +33,11 @@ fn bench_insert_latency(iters: u64) -> Histogram<u64> {
 
     // Warm up: 10k orders to fill instruction/branch-predictor caches
     for _ in 0..10_000 {
-        let side = if id % 2 == 0 { Side::Bid } else { Side::Ask };
+        let side = if id.is_multiple_of(2) {
+            Side::Bid
+        } else {
+            Side::Ask
+        };
         let price = if side == Side::Bid {
             4900 + (id % 100)
         } else {
@@ -59,7 +63,11 @@ fn bench_insert_latency(iters: u64) -> Histogram<u64> {
     id = 1;
 
     for _ in 0..iters {
-        let side = if id % 2 == 0 { Side::Bid } else { Side::Ask };
+        let side = if id.is_multiple_of(2) {
+            Side::Bid
+        } else {
+            Side::Ask
+        };
         let price = if side == Side::Bid {
             4900 + (id % 100)
         } else {
