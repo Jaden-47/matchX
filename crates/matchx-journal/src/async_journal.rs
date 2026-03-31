@@ -234,6 +234,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Miri thread scheduling may drain the queue before second append
     fn append_returns_queue_full_when_capacity_exhausted() {
         let dir = tempfile::tempdir().unwrap();
         let prefix = dir.path().join("seg");
